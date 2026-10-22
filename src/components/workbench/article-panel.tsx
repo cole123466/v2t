@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type RefObject } from "react";
+import Image from "next/image";
 import { ChevronRight, Download, FileText, Loader, RotateCcw, X } from "lucide-react";
 import type { Article, MindMapNode } from "@/server/article";
 import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
@@ -12,7 +13,7 @@ const DETAIL_OPTIONS: Array<{ value: ArticleDetailLevel; label: string; hint: st
   { value: "detailed", label: "深入", hint: "展开推导与细节" },
 ];
 
-/** 把正文里的 [[tNN]] / [[fNN]] 渲染成可点击的引用芯片 */
+/** 把正文里的 [[tNN]] 渲染成可点击的时间芯片；[[fNN]] 由下方的真实画面承载 */
 function CitationText({
   text,
   onSeek,
@@ -31,6 +32,8 @@ function CitationText({
         if (!match) return <span key={i}>{part}</span>;
         const id = `${match[1]}${match[2]}`;
         const t = times.get(id);
+        // 画面引用不占正文，交给段落下方的图注渲染
+        if (match[1] === "f") return null;
         if (t === undefined) {
           return (
             <span
@@ -55,6 +58,79 @@ function CitationText({
         );
       })}
     </>
+  );
+}
+
+/** 单张画面：点击回到视频对应时间；帧被清理或缺失时静默不渲染 */
+function ArticleFrame({
+  taskId,
+  frameId,
+  tSec,
+  onSeek,
+}: {
+  taskId: string;
+  frameId: string;
+  tSec: number;
+  onSeek: (t: number) => void;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    <figure className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
+      <button
+        type="button"
+        onClick={() => onSeek(tSec)}
+        title={`回到 ${clock(tSec)}`}
+        className="block w-full"
+      >
+        <Image
+          src={`/api/tasks/${taskId}/frames/${frameId}`}
+          alt={`画面 ${frameId}`}
+          width={1280}
+          height={720}
+          unoptimized
+          loading="lazy"
+          className="aspect-video w-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      </button>
+      <figcaption className="flex items-center justify-between px-3 py-1.5 font-mono text-[10px] tracking-wider text-paper-faint">
+        <span>{frameId.toUpperCase()}</span>
+        <span>{clock(tSec)}</span>
+      </figcaption>
+    </figure>
+  );
+}
+
+/** 段落中引用到的画面，按出现顺序渲染为真实图片 */
+function FrameStrip({
+  text,
+  taskId,
+  times,
+  onSeek,
+}: {
+  text: string;
+  taskId: string;
+  times: Map<string, number>;
+  onSeek: (t: number) => void;
+}) {
+  const frames = useMemo(() => {
+    const ids = Array.from(text.matchAll(/\[\[(f\d{2,})\]\]/g), (m) => m[1]);
+    return Array.from(new Set(ids)).filter((id) => times.has(id));
+  }, [text, times]);
+  if (frames.length === 0) return null;
+  return (
+    <div className={`mt-3 grid gap-2 ${frames.length > 1 ? "sm:grid-cols-2" : ""}`}>
+      {frames.map((id) => (
+        <ArticleFrame
+          key={id}
+          taskId={taskId}
+          frameId={id}
+          tSec={times.get(id) as number}
+          onSeek={onSeek}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -146,8 +222,12 @@ export function ArticlePanel({
   );
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    fetch(`/api/tasks/${taskId}/articles`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { articles: ArticleRecord[] } | null) => {
+        if (data) setArticles(data.articles);
+      });
+  }, [taskId]);
 
   const active = articles.find((a) => a.id === selected) ?? articles.find((a) => a.status === "done");
 
@@ -221,7 +301,17 @@ export function ArticlePanel({
     for (const section of article.sections) {
       lines.push(`## ${section.title}`, "");
       for (const block of section.blocks) {
-        lines.push(block.text, "");
+        const frames = Array.from(
+          new Set(Array.from(block.text.matchAll(/\[\[(f\d{2,})\]\]/g), (m) => m[1])),
+        );
+        const text = block.text
+          .replace(/\[\[f\d{2,}\]\]/g, "")
+          .replace(/[ \t]{2,}/g, " ")
+          .trim();
+        if (text) lines.push(text, "");
+        for (const id of frames) {
+          lines.push(`![画面 ${id}](/api/tasks/${taskId}/frames/${id})`, "");
+        }
       }
     }
     if (article.limitations.length > 0) {
@@ -342,9 +432,17 @@ export function ArticlePanel({
                 <h3 className="font-display text-lg font-semibold text-paper">{section.title}</h3>
                 <div className="mt-2 space-y-3">
                   {section.blocks.map((block, i) => (
-                    <p key={i} className="text-sm leading-relaxed text-paper-dim">
-                      <CitationText text={block.text} onSeek={seek} times={citationTimes} />
-                    </p>
+                    <div key={i}>
+                      <p className="text-sm leading-relaxed text-paper-dim">
+                        <CitationText text={block.text} onSeek={seek} times={citationTimes} />
+                      </p>
+                      <FrameStrip
+                        text={block.text}
+                        taskId={taskId}
+                        times={citationTimes}
+                        onSeek={seek}
+                      />
+                    </div>
                   ))}
                 </div>
               </section>
