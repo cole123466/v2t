@@ -1,164 +1,103 @@
 # V2T — 声画内容工作台
 
-上传本地视频或粘贴 B 站 / YouTube 链接，自动完成转写、抽帧，并生成**带时间出处与真实画面**的图文文章；还可以围绕视频追问。播放器、波形与文稿三方联动，全程一站式完成。
+上传本地视频或粘贴 B 站 / YouTube 链接，自动转写、抽帧，并生成**带时间出处与真实画面**的图文文章；还可以围绕视频提问。播放器、波形、文稿三方联动。
 
 ```
-（本地上传 | 链接导入）→ 字幕优先 / ffmpeg 抽音频 →（超 50 分钟自动分段）→ ASR 转写
-→ 全景抽帧 → 工作台联动浏览 → 图文文章（提纲 → 逐章）| AI 文案 | 证据问答
+本地上传 | 链接导入 → 字幕优先 / ffmpeg 抽音频 → ASR 转写（长音频自动分段）
+→ 全景抽帧 → 文稿/画面联动浏览 → 图文文章 | AI 文案 | 证据问答
 ```
 
 ## 功能
 
-- **两种来源**：本地视频 / 音频直传（最大 2GB，可配）；或粘贴 B 站（含分 P）与 YouTube 链接，免登录下载后进入同一管线
-- **字幕优先转写**：容器内字幕轨道可用时优先采用（覆盖率不足自动回退 ASR），任务详情展示转写来源
-- **时间戳转写**：句级时间戳的中文转写；长音频自动按 50 分钟分段、时间戳偏移合并
-- **全景抽帧**：就绪后自动抽取覆盖全片的画面帧，作为文章配图与问答取证依据；抽帧失败不影响文稿与文案
-- **图文文章**：两步生成（提纲 → 逐章），产出带章节、真实画面、`[[tNN]]`/`[[fNN]]` 时间引用与内容导图的文章；引用经服务端白名单校验，模型无法编造出处；三档深度（速览/标准/深入）+ 可选关注点；可导出 Markdown
-- **证据问答**：围绕视频提问，回答标出转写稿出处并显式列出「未确认之处」；点击引用芯片跳转视频对应时间；跨语言提问在词法检索无命中时自动改用全片抽样
-- **过程回看**：每次模型调用的目的、耗时与结果持久化，任务完成后仍可查看
-- **声画稿联动**：自定义播放器 + 客户端波形 + 转写稿三方联动，点击任意一句即定位画面
-- **AI 文案生成**：4 个预设模板（全文精炼 / 小红书笔记 / 公众号长文 / 三句话速览）或自定义提示词，流式输出、多版本历史、复制与 Markdown 导出
-- **存储治理**：源视频 / 音频 / 画面帧按保留天数自动清理（默认 7 天），转录稿、文章与文案永久保留；任务可整体删除；存储占用统计
-- **健壮性**：服务重启时自动把"处理中"的孤儿任务标记为失败并给出原因
+- **两种来源**：本地上传（默认 ≤2GB）或 B 站（含分 P）/ YouTube 链接导入
+- **转写**：优先使用容器字幕，覆盖率不足回退 ASR；句级时间戳，超 50 分钟自动分段合并
+- **抽帧**：就绪后抽取覆盖全片的全景帧，作为文章配图与问答取证
+- **图文文章**：提纲 → 逐章两步生成，正文插入真实画面，带 `[[tNN]]` / `[[fNN]]` 出处与内容导图；三档深度，可导出 Markdown
+- **证据问答**：回答标注转写稿出处，显式列出「未确认之处」，点击编号跳转视频时间
+- **AI 文案**：4 个预设模板或自定义提示词，流式输出、多版本历史
+- **存储治理**：源视频 / 音频 / 画面帧按天清理（默认 7 天），转录稿与文案永久保留
 
-## 前置依赖
+## 依赖
 
-- **Node.js ≥ 22.5**（使用内置 `node:sqlite`，无需 VS C++ 工具链或 Python）
-- **ffmpeg**（含 ffprobe）：需要在 PATH 中可用
-- **yt-dlp**（可选）：仅链接导入需要；缺失时本地上传与转写不受影响
+- **Node.js ≥ 22.5**（使用内置 `node:sqlite`，无需编译原生模块）
+- **ffmpeg**（含 ffprobe），需在 PATH 中
+- **yt-dlp**（可选），仅链接导入需要
 
 ```bash
-ffmpeg -version   # 验证安装
-yt-dlp --version  # 验证下载器（可选）
+ffmpeg -version    # 必须有输出
+yt-dlp --version   # 可选
 ```
 
-Windows 上 ffmpeg 可从 [ffmpeg.org](https://ffmpeg.org/download.html) 下载后将 bin 目录加入 PATH；yt-dlp 用 `winget install yt-dlp.yt-dlp` 或 `pip install -U yt-dlp`。
-
-**Linux 从零开始（Ubuntu / Debian 系）：**
+## 快速开始
 
 ```bash
-# 1. Node.js 22.5+（NodeSource；发行版自带的 node 通常版本不足）
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt install -y nodejs ffmpeg
-
-# 2. yt-dlp（可选，仅链接导入需要）
-sudo apt install -y pipx && pipx install yt-dlp
-
-# 3. 在解压后的项目目录里搭建并启动
-bash scripts/setup.sh
-bash scripts/start.sh
+bash scripts/setup.sh        # 校验依赖 → 安装 npm 包 → 生成 .env
+bash scripts/start-prod.sh   # 构建 + 生产模式 → http://localhost:4317
 ```
 
-RHEL / Fedora / Arch 用各自的包管理器装 `nodejs>=22.5` 与 `ffmpeg` 即可，其余步骤相同。项目不需要 C++ 工具链或 Python 编译原生模块（SQLite 走 Node 内置 `node:sqlite`）。
-
-## 一键搭建与启动
-
-提供跨平台脚本，新机器从零跑起来只需两步。
-
-**Windows（cmd / PowerShell）：**
+Windows：
 
 ```bat
-scripts\setup.bat              :: 校验 Node/ffmpeg -> 装依赖 -> 生成 .env
-scripts\start.bat              :: 构建 + 生产模式，http://localhost:4317
-scripts\start.bat --dev        :: 开发模式（热更新）
+scripts\setup.bat
+scripts\start-prod.bat
 ```
 
-**macOS / Linux / Git Bash：**
+首次运行请在 `.env` 填好 `SILICONFLOW_API_KEY`（转写）和 `LLM_API_KEY`（文案 / 图文 / 问答）。
 
-```bash
-bash scripts/setup.sh          # 同上
-bash scripts/start.sh          # 构建 + 生产模式
-bash scripts/start.sh --dev    # 开发模式
-```
+## 启动方式
 
-常用参数（两个 start 脚本一致）：
-
-| 参数 | 说明 |
+| 命令 | 说明 |
 | --- | --- |
-| `--dev` | 开发模式，热更新，不构建 |
-| `--skip-build` | 生产模式但复用已有 `.next` 产物，快速重启 |
-| `--port 8080` | 指定端口（亦可用环境变量 `V2T_PORT`） |
-| `--help` | 查看用法 |
+| `scripts/start-prod.sh` / `.bat` | 对外提供服务：构建后以生产模式运行，零配置 |
+| `scripts/start-dev.sh` / `.bat` | 本机开发：热更新，不构建，仅 localhost 默认放行 |
+| `--port 8080` 或 `V2T_PORT=8080` | 改端口，默认 **4317** |
+| `--skip-build` | 生产模式复用已有 `.next` 产物，快速重启 |
+| `--help` | 查看全部参数 |
 
-## 手动启动
+`scripts/start.sh` 仍可直接用，加 `--dev` 切换模式。
 
-```bash
-npm install
-cp .env.example .env   # 填入你自己的 API Key
-npm run dev            # http://localhost:4317
-```
-
-生产运行：
-
-```bash
-npm run build
-npm start              # 同样监听 4317
-```
-
-> 端口固定为 4317（避开 3000 这类常用端口）。如需临时改变，可用 `PORT=8080 npm run dev`。
-
-测试（服务层 TDD 套件）：
-
-```bash
-npm test
-```
-
-## 配置项（.env）
+## 配置（.env）
 
 | 变量 | 说明 | 默认 |
 | --- | --- | --- |
-| `SILICONFLOW_API_KEY` | 硅基流动 API Key（转写用） | 必填 |
-| `SILICONFLOW_BASE_URL` | 硅基流动 OpenAI 兼容端点 | `https://api.siliconflow.cn/v1` |
-| `ASR_MODEL` | 转写模型（需支持时间戳返回） | `XingChenAGI/XingChenASR-V3.2-Ultra` |
-| `LLM_BASE_URL` | 文案与文章生成 LLM 的 OpenAI 兼容端点 | `https://open.bigmodel.cn/api/paas/v4` |
-| `LLM_API_KEY` | LLM API Key（默认智谱 bigmodel） | 必填 |
-| `LLM_MODEL` | 纯文本模型（文案模板、提纲与问答） | `glm-4.6` |
-| `LLM_VISION_MODEL` | 视觉模型（图文文章的带图章节调用） | `glm-4.6v-flash` |
-| `DOWNLOADER_COOKIES_FILE` | 链接导入的可选登录 Cookie 文件（Netscape 格式） | 空 = 免登录 |
-| `MAX_UPLOAD_GB` | 上传大小上限（GB） | `2` |
-| `MEDIA_RETENTION_DAYS` | 源媒体与画面帧保留天数（转录、文章、文案不受限） | `7` |
-| `DATA_DIR` | 数据目录（SQLite + 任务媒体） | `./data` |
+| `SILICONFLOW_API_KEY` | 转写 API Key | 必填 |
+| `ASR_MODEL` | 转写模型 | `XingChenAGI/XingChenASR-V3.2-Ultra` |
+| `LLM_API_KEY` | 文案 / 图文 / 问答 API Key | 必填 |
+| `LLM_BASE_URL` | LLM 的 OpenAI 兼容端点 | `https://open.bigmodel.cn/api/paas/v4` |
+| `LLM_MODEL` / `LLM_VISION_MODEL` | 文本模型 / 视觉模型 | `glm-4.6` / `glm-4.6v` |
+| `DOWNLOADER_COOKIES_FILE` | 链接导入的登录 Cookie（Netscape 格式） | 空 = 免登录 |
+| `MAX_UPLOAD_GB` | 上传上限 | `2` |
+| `MEDIA_RETENTION_DAYS` | 媒体保留天数 | `7` |
+| `DATA_DIR` | 数据库与任务媒体目录 | `./data` |
+| `ALLOWED_DEV_ORIGINS` | 仅开发模式：允许的远程 host（逗号分隔，不入库） | 空 |
 
-> 转写走硅基流动，单文件硬限制约 1 小时 / 50MB——因此超过 50 分钟的音频会自动分段转写再合并。
->
-> 免登录 Cookie 时 B 站可下载免登录可达的清晰度（约 480P），足够全景帧使用；**平台字幕需要登录 Cookie**，未提供时字幕优先只对本地上传视频的容器内字幕轨生效。
+### 关于 B 站下载
+
+机房 IP 常被 B 站风控返回 412。程序会自动改走官方内容接口兜底，拿到 **720P 单文件**，足够抽帧与转写。想要更高清晰度或平台字幕，需导出登录态 Cookie：
+
+1. 浏览器登录 B 站，用扩展导出 Netscape 格式的 cookies.txt；
+2. `.env` 设置 `DOWNLOADER_COOKIES_FILE=/绝对路径/cookies.txt`；
+3. 重启服务。
+
+## 开发
+
+```bash
+npm run dev        # 开发服务器（4317）
+npm run build      # 生产构建
+npm run lint       # ESLint
+npm run typecheck  # tsc --noEmit
+npm test           # vitest（服务层）
+```
+
+远程访问开发服务器时，Next 16 会拦截非 localhost 的 `/_next` 资源（表现为热更新不生效）。本机开发无需处理；确需远程调试热更新，才在 `.env` 设 `ALLOWED_DEV_ORIGINS=<你的 host>`。对外提供服务请直接用 `start-prod`，不涉及该限制。
 
 ## 技术栈
 
-- **前端**：Next.js 16（App Router / Turbopack）、React 19、Tailwind CSS v4（`@theme` 设计 tokens）、motion、Lucide 图标（全站零表情符号）
-- **后端**：Next.js Route Handlers（Node runtime）、内置 `node:sqlite`（WAL，零原生编译）、SSE 任务进度与生成流式输出、HTTP Range 视频拖动
-- **服务抽象**：`ASRProvider` 与 `LLMProvider` 为注入接口，服务层测试全部使用假实现（`tests/server/`）
-- **数据**：`data/v2t.db`（任务 + 文案版本）与 `data/tasks/<id>/`（source.* / audio.mp3 / transcript.json）
+Next.js 16（App Router / Turbopack）· React 19 · Tailwind CSS v4 · motion · Lucide 图标；后端为 Next Route Handlers + 内置 `node:sqlite`，SSE 推送任务进度与生成流。
 
-## 目录速览
+## 限制
 
-```
-src/
-  app/                    # 页面与 API 路由
-    page.tsx              # Landing 滚动叙事
-    studio/               # 上传 / 链接导入工作台
-    task/[id]/            # 三栏联动工作台（文稿 / 图文 / 问答 / 文案 / 过程）
-    api/tasks/…           # 上传 / 链接导入 / 状态 / SSE / 转录稿 / 画面帧 / 文章 / 问答 / 过程
-    api/source/probe/     # 链接元数据预检
-    api/storage/          # 存储统计
-  components/
-    workbench/            # 播放器 / 波形 / 转写稿 / 文章 / 问答 / 过程 / 提示词面板
-    landing/              # 波形条阵
-  server/                 # ffmpeg / 字幕 / 抽帧 / 下载器 / 转写 / 文章 / 问答 / 任务队列 / 存储治理
-scripts/                  # setup.sh|bat 一键搭建，start.sh|bat 启动（含端口/模式参数）
-tests/server/             # 服务层 TDD（Seam A 管线 / B 文案 / C 来源 / D 问答 / 维护）
-```
-
-## 设计边界
-
-- **引用可校验但不等同于语义正确**：服务端校验编号存在、帧文件存在、时间落在时长内；它保证出处不是编的，不保证每个论断都准确。
-- **检索是词法的**：没有向量检索（SQLite 无原生支持）。短转写全量送入；长转写先词法检索，无命中时退化为全片均匀抽样。
-- **抽帧是稀疏的**：默认 12 张全景帧覆盖全片，不能证明所有视觉事件都被看到。文章与问答的 `limitations` 会显式说明这一点。
-- **审核不替代人工**：生成的文章与回答仍需自己过一遍再发布。
-
-## 已知边界（范围外）
-
-- 多用户 / 鉴权：本地单人使用，无鉴权
-- 单条分享链接与公开示例页：本地工具无公网承载，未实现
-- 运行时模型选择 UI：模型经 `.env` 配置
-- E2E 测试：二期
+- 引用校验只保证编号、帧与时间点真实存在，不保证论断语义正确
+- 检索是词法的（无向量检索），长转写先检索、无命中再全片抽样
+- 默认 12 张全景帧，覆盖稀疏，文章与问答会在 `limitations` 中说明
+- 本地单人使用，无鉴权

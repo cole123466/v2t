@@ -6,6 +6,7 @@
 #   bash scripts/start.sh --dev           开发模式（热更新）
 #   bash scripts/start.sh --port 8080     指定端口
 # 端口也可用环境变量 V2T_PORT 覆盖
+# 也可直接用 scripts/start-dev.sh / scripts/start-prod.sh（内部复用本脚本）
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -27,7 +28,7 @@ while [ $# -gt 0 ]; do
       PORT="$2"; shift 2 ;;
     --port=*) PORT="${1#*=}"; shift ;;
     -h|--help)
-      sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) fail "未知参数：$1（用 --help 查看用法）" ;;
   esac
