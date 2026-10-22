@@ -7,6 +7,7 @@ import { taskDir, transcriptPath } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
 import type { ArticleDetailLevel } from "@/server/articles";
 import { errorFields, logError } from "@/server/log";
+import { requestId } from "@/server/request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,6 +23,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const traceId = requestId(req);
   const rt = getRuntime();
   const task = rt.store.get(id);
   if (!task) return Response.json({ error: "任务不存在" }, { status: 404 });
@@ -72,6 +74,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       try {
         const record = await rt.articleService.generate({
           taskId: id,
+          traceId,
           catalog,
           frameFiles,
           detailLevel,
@@ -93,9 +96,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
             error: problems.map((p) => `${p.field}: ${p.message}`).join("；").slice(0, 500),
           });
           rt.activities.finish(activity.id, { ok: false, message: "引用或结构校验未通过" });
+          logError("article validation failed", {
+            task_id: id,
+            trace_id: traceId,
+            problems: problems.length,
+          });
           send("error", {
             message: "引用或结构校验未通过",
             problems: problems.slice(0, 10),
+            request_id: traceId,
           });
           return;
         }
@@ -104,9 +113,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         send("done", rt.articles.get(record.id) ?? record);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        logError("article request failed", { task_id: id, ...errorFields(err) });
+        logError("article request failed", { task_id: id, trace_id: traceId, ...errorFields(err) });
         rt.activities.finish(activity.id, { ok: false, message });
-        send("error", { message });
+        send("error", { message, request_id: traceId });
       } finally {
         try {
           controller.close();

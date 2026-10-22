@@ -3,6 +3,7 @@ import type { Transcript } from "@/server/asr";
 import { taskDir, transcriptPath } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
 import { errorFields, logError } from "@/server/log";
+import { requestId } from "@/server/request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,6 +19,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const traceId = requestId(req);
   const rt = getRuntime();
   const task = rt.store.get(id);
   if (!task) return Response.json({ error: "任务不存在" }, { status: 404 });
@@ -55,6 +57,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       try {
         const result = await rt.qaService.ask({
           taskId: id,
+          traceId,
           transcript,
           question,
           onDelta: (delta) => send("delta", { delta }),
@@ -63,9 +66,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         send("done", result.message);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        logError("qa request failed", { task_id: id, ...errorFields(err) });
+        logError("qa request failed", { task_id: id, trace_id: traceId, ...errorFields(err) });
         rt.activities.finish(activity.id, { ok: false, message });
-        send("error", { message });
+        send("error", { message, request_id: traceId });
       } finally {
         try {
           controller.close();

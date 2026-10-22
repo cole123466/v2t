@@ -131,6 +131,7 @@ export interface LLMMessage {
 export interface LLMCallMeta {
   operation?: string;
   taskId?: string;
+  traceId?: string;
 }
 
 export interface LLMProvider {
@@ -186,6 +187,7 @@ export class GenerationService {
     transcript: Pick<Transcript, "segments">,
     input: GenerationInput,
     onChunk?: (delta: string) => void,
+    traceId?: string,
   ): Promise<Generation> {
     const template =
       input.mode === "auto" ? PRESET_TEMPLATES.find((t) => t.id === input.templateId) : undefined;
@@ -209,6 +211,7 @@ export class GenerationService {
     });
     logInfo("copywriting generation started", {
       task_id: taskId,
+      trace_id: traceId,
       generation_id: gen.id,
       mode: input.mode,
       template: template?.id,
@@ -226,11 +229,12 @@ export class GenerationService {
           gen.output += delta;
           onChunk?.(delta);
         },
-        { operation: `copywriting.${input.mode}`, taskId },
+        { operation: `copywriting.${input.mode}`, taskId, traceId },
       );
       this.opts.store.update(gen.id, { output, status: "done" });
       logInfo("copywriting generation completed", {
         task_id: taskId,
+        trace_id: traceId,
         generation_id: gen.id,
         chars: output.length,
         duration_ms: elapsedMs(startedAt),
@@ -241,6 +245,7 @@ export class GenerationService {
       this.opts.store.update(gen.id, { status: "failed", error: message });
       logError("copywriting generation failed", {
         task_id: taskId,
+        trace_id: traceId,
         generation_id: gen.id,
         ...errorFields(err),
         duration_ms: elapsedMs(startedAt),

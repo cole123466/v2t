@@ -3,6 +3,7 @@ import { taskDir } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
 import { isSupportedLink } from "@/server/source";
 import { errorFields, logInfo, logWarn } from "@/server/log";
+import { requestId } from "@/server/request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,6 +13,7 @@ export const dynamic = "force-dynamic";
  * 元数据（标题/时长/封面）在此处先行取一次，让用户在下载开始前看到将导入什么。
  */
 export async function POST(req: Request) {
+  const traceId = requestId(req);
   const body = (await req.json().catch(() => null)) as { url?: string } | null;
   const url = body?.url?.trim() ?? "";
   if (!url) return Response.json({ error: "缺少 url" }, { status: 400 });
@@ -29,6 +31,7 @@ export async function POST(req: Request) {
     meta = await source.probe(url);
   } catch (err) {
     logWarn("link probe failed", {
+      trace_id: traceId,
       host: new URL(url).host,
       ...errorFields(err),
     });
@@ -61,6 +64,7 @@ export async function POST(req: Request) {
 
   logInfo("link task accepted", {
     task_id: task.id,
+    trace_id: traceId,
     host: new URL(url).host,
     title_chars: meta.title.length,
     duration_sec: meta.durationSec,

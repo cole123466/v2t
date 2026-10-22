@@ -8,6 +8,7 @@ import { getMaxUploadBytes } from "@/server/config";
 import { sourcePath, taskDir } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
 import { logInfo, logWarn } from "@/server/log";
+import { requestId } from "@/server/request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +18,7 @@ function fail(error: string, status: number) {
 }
 
 export async function POST(req: Request) {
+  const traceId = requestId(req);
   const rawName = new URL(req.url).searchParams.get("name") ?? "upload.mp4";
   const originalName =
     path.basename(rawName).replace(/[\u0000-\u001f<>:"/\\|?*]/g, "").slice(0, 200) ||
@@ -50,6 +52,7 @@ export async function POST(req: Request) {
     store.update(task.id, { status: "failed", error: "上传中断，文件不完整" });
     logWarn("upload interrupted", {
       task_id: task.id,
+      trace_id: traceId,
       file: originalName,
       bytes: sizeBytes,
     });
@@ -61,6 +64,7 @@ export async function POST(req: Request) {
     store.update(task.id, { status: "failed", error: "上传不完整，请重试" });
     logWarn("upload incomplete", {
       task_id: task.id,
+      trace_id: traceId,
       file: originalName,
       expected_bytes: sizeBytes,
       actual_bytes: actual,
@@ -70,6 +74,7 @@ export async function POST(req: Request) {
 
   logInfo("upload accepted", {
     task_id: task.id,
+    trace_id: traceId,
     file: originalName,
     bytes: sizeBytes,
     ext,

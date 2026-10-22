@@ -217,6 +217,8 @@ export interface QaServiceOptions {
 
 export interface AskInput {
   taskId: string;
+  /** 请求级关联 id（来自 proxy 注入的 x-request-id） */
+  traceId?: string;
   transcript: Transcript;
   question: string;
   onDelta?: (delta: string) => void;
@@ -244,6 +246,7 @@ export class QaService {
     const sampled = !full && hits.length === 0 && candidates.length > 0;
     logInfo("qa retrieval ready", {
       task_id: input.taskId,
+      trace_id: input.traceId,
       mode: full ? "full" : hits.length > 0 ? "retrieval" : "sample",
       total_segments: all.length,
       candidates: candidates.length,
@@ -278,11 +281,12 @@ export class QaService {
           },
         ],
         (delta) => input.onDelta?.(delta),
-        { operation: "qa.answer", taskId: input.taskId },
+        { operation: "qa.answer", taskId: input.taskId, traceId: input.traceId },
       );
     } catch (err) {
       logError("qa answer failed", {
         task_id: input.taskId,
+        trace_id: input.traceId,
         ...errorFields(err),
         duration_ms: elapsedMs(startedAt),
       });
@@ -329,6 +333,7 @@ export class QaService {
     });
     logInfo("qa answer completed", {
       task_id: input.taskId,
+      trace_id: input.traceId,
       message_id: message.id,
       citations: valid.length,
       invalid_citations: invalidTokens.length,

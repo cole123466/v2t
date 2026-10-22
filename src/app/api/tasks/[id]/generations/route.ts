@@ -3,6 +3,7 @@ import { taskDir, transcriptPath } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
 import { PRESET_TEMPLATES, type GenerationInput } from "@/server/generations";
 import type { Transcript } from "@/server/asr";
+import { requestId } from "@/server/request";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,6 +25,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const traceId = requestId(req);
   const { store, generationService, dataDir } = getRuntime();
   const task = store.get(id);
   if (!task) return Response.json({ error: "任务不存在" }, { status: 404 });
@@ -77,12 +79,19 @@ export async function POST(
         }
       };
       try {
-        const gen = await generationService.generateForTask(id, transcript, body, (delta) =>
-          send("delta", { delta }),
+        const gen = await generationService.generateForTask(
+          id,
+          transcript,
+          body,
+          (delta) => send("delta", { delta }),
+          traceId,
         );
         send("done", gen);
       } catch (err) {
-        send("error", { message: err instanceof Error ? err.message : String(err) });
+        send("error", {
+          message: err instanceof Error ? err.message : String(err),
+          request_id: traceId,
+        });
       } finally {
         close();
       }

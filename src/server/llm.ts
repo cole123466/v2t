@@ -34,6 +34,7 @@ export function createOpenAiCompatibleLlm(): LLMProvider {
             provider: "llm",
             operation: meta?.operation,
             task_id: meta?.taskId,
+            trace_id: meta?.traceId,
             attempt: attempt + 1,
           });
         }
@@ -58,6 +59,7 @@ async function streamOnce(
     model,
     operation: meta?.operation,
     task_id: meta?.taskId,
+    trace_id: meta?.traceId,
     messages: messages.length,
     images: messages.reduce(
       (count, message) =>

@@ -256,6 +256,8 @@ export interface ArticleServiceOptions {
 
 export interface GenerateArticleInput {
   taskId: string;
+  /** 请求级关联 id（来自 proxy 注入的 x-request-id） */
+  traceId?: string;
   catalog: CitationCatalog;
   /** 帧目录相对路径 → 帧 id，用于挑选发给模型的图片 */
   frameFiles: Map<string, string>;
@@ -280,6 +282,7 @@ export class ArticleService {
     });
     logInfo("article generation started", {
       task_id: input.taskId,
+      trace_id: input.traceId,
       article_id: record.id,
       detail,
       has_purpose: purpose !== null,
@@ -297,12 +300,13 @@ export class ArticleService {
           { role: "user", content: outlinePrompt(input.catalog, detail, purpose) },
         ],
         () => {},
-        { operation: "article.outline", taskId: input.taskId },
+        { operation: "article.outline", taskId: input.taskId, traceId: input.traceId },
       );
       const outline = this.parseOutline(outlineRaw);
       this.opts.store.update(record.id, { outline, title: outline.title });
       logInfo("article outline ready", {
         task_id: input.taskId,
+        trace_id: input.traceId,
         article_id: record.id,
         sections: outline.sections.length,
         duration_ms: elapsedMs(outlineAt),
@@ -364,6 +368,7 @@ export class ArticleService {
           const raw = await this.opts.llm.generate(messages, (delta) => input.onDelta?.(delta), {
             operation: "article.section",
             taskId: input.taskId,
+            traceId: input.traceId,
           });
           try {
             parsed = JSON.parse(looseJsonBody(raw)) as SectionPayload;
@@ -386,6 +391,7 @@ export class ArticleService {
               parsed = null;
               logWarn("article section retry", {
                 task_id: input.taskId,
+                trace_id: input.traceId,
                 article_id: record.id,
                 section: section.id,
                 attempt: attempt + 1,
@@ -401,6 +407,7 @@ export class ArticleService {
             parsed = null;
             logWarn("article section retry", {
               task_id: input.taskId,
+              trace_id: input.traceId,
               article_id: record.id,
               section: section.id,
               attempt: attempt + 1,
@@ -420,6 +427,7 @@ export class ArticleService {
         });
         logInfo("article section ready", {
           task_id: input.taskId,
+          trace_id: input.traceId,
           article_id: record.id,
           section: section.id,
           index: i + 1,
@@ -452,6 +460,7 @@ export class ArticleService {
       this.opts.store.update(record.id, { content: article, status: "done", title: article.title });
       logInfo("article generation completed", {
         task_id: input.taskId,
+        trace_id: input.traceId,
         article_id: record.id,
         sections: article.sections.length,
         blocks: article.sections.reduce((sum, section) => sum + section.blocks.length, 0),
@@ -463,6 +472,7 @@ export class ArticleService {
       this.opts.store.update(record.id, { status: "failed", error: message });
       logError("article generation failed", {
         task_id: input.taskId,
+        trace_id: input.traceId,
         article_id: record.id,
         ...errorFields(err),
         duration_ms: elapsedMs(startedAt),

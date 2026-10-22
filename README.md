@@ -106,7 +106,8 @@ bash scripts/ci.sh   # 或 npm run ci
 服务端输出 logfmt 单行日志（`时间 level=INFO msg="..." key=value`），写到 stdout/stderr：
 
 - 覆盖任务管线、上传 / 链接导入、ASR、LLM 调用、图文文章、问答、文案生成与媒体清理
-- 只记录事件和上下文（task_id、model、耗时、字节数等），不记录提示词、转写稿或 API Key
+- 只记录事件和上下文（task_id、request_id、model、耗时、字节数等），不记录提示词、转写稿或 API Key
+- 所有 `/api/*` 响应带 `X-Request-ID`，SSE 的 `error` 事件带 `request_id`；排查时把该值贴给服务端即可定位整条调用链
 - `LOG_LEVEL=debug` 可看逐段 ASR / 抽帧细节；`LOG_STACK=1` 让错误日志附带堆栈
 - 生产环境交给 journald，或直接重定向：`bash scripts/start-prod.sh --skip-build > app.log 2>&1`
 
