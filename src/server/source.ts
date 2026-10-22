@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { mkdir, readdir, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import { getDownloaderConfig } from "./config";
+import { downloadBilibili, isBilibiliUrl, probeBilibili } from "./bilibili";
 
 const run = promisify(execFile);
 
@@ -84,7 +85,16 @@ export function createYtDlpProvider(): SourceProvider {
         ));
       } catch (err) {
         if ((err as { code?: string }).code === "ENOENT") throw new Error(MISSING_YTDLP);
-        throw new Error(toolErrorMessage(url, (err as { stderr?: string }).stderr));
+        const message = toolErrorMessage(url, (err as { stderr?: string }).stderr);
+        if (isBilibiliUrl(url)) {
+          // 机房 IP 常被 B 站风控拦住网页，此时改走官方内容接口
+          try {
+            return await probeBilibili(url);
+          } catch (fallbackError) {
+            throw new Error(`${message}（API 兜底失败：${(fallbackError as Error).message}）`);
+          }
+        }
+        throw new Error(message);
       }
       const info = JSON.parse(stdout) as {
         title?: string;
@@ -111,36 +121,42 @@ export function createYtDlpProvider(): SourceProvider {
         url,
       ];
 
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn("yt-dlp", args, { windowsHide: true });
-        let stderr = "";
-        let buffer = "";
-        child.stdout.setEncoding("utf8");
-        child.stdout.on("data", (chunk: string) => {
-          buffer += chunk;
-          const lines = buffer.split(/\r?\n/);
-          buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            const progress = parseProgressLine(line);
-            if (progress) onProgress?.(progress);
-          }
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const child = spawn("yt-dlp", args, { windowsHide: true });
+          let stderr = "";
+          let buffer = "";
+          child.stdout.setEncoding("utf8");
+          child.stdout.on("data", (chunk: string) => {
+            buffer += chunk;
+            const lines = buffer.split(/\r?\n/);
+            buffer = lines.pop() ?? "";
+            for (const line of lines) {
+              const progress = parseProgressLine(line);
+              if (progress) onProgress?.(progress);
+            }
+          });
+          child.stderr.setEncoding("utf8");
+          child.stderr.on("data", (chunk: string) => {
+            stderr += chunk;
+          });
+          child.on("error", (err) => {
+            reject(
+              (err as NodeJS.ErrnoException).code === "ENOENT"
+                ? new Error(MISSING_YTDLP)
+                : new Error(`下载失败：${err.message}`),
+            );
+          });
+          child.on("close", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(toolErrorMessage(url, stderr)));
+          });
         });
-        child.stderr.setEncoding("utf8");
-        child.stderr.on("data", (chunk: string) => {
-          stderr += chunk;
-        });
-        child.on("error", (err) => {
-          reject(
-            (err as NodeJS.ErrnoException).code === "ENOENT"
-              ? new Error(MISSING_YTDLP)
-              : new Error(`下载失败：${err.message}`),
-          );
-        });
-        child.on("close", (code) => {
-          if (code === 0) resolve();
-          else reject(new Error(toolErrorMessage(url, stderr)));
-        });
-      });
+      } catch (err) {
+        // yt-dlp 被 B 站风控（412）时，改走官方内容接口取 720P 单文件
+        if (isBilibiliUrl(url)) return downloadBilibili(url, destDir, onProgress);
+        throw err;
+      }
 
       const files = (await readdir(destDir)).filter((n) => n.startsWith("media."));
       if (files.length === 0) throw new Error(`下载完成但未找到媒体文件（${url}）`);
@@ -155,5 +171,8 @@ export function createYtDlpProvider(): SourceProvider {
 function toolErrorMessage(target: string, stderr: unknown): string {
   const text = typeof stderr === "string" && stderr.trim() ? stderr : String(stderr ?? "");
   const detail = text.split(/\r?\n/).filter(Boolean).slice(-4).join(" | ") || "无输出";
-  return `下载失败（${target}）：${detail}`;
+  const hint = /HTTP Error 412/.test(text)
+    ? "（B 站风控拦截，可配置 .env 的 DOWNLOADER_COOKIES_FILE 或更换出口网络）"
+    : "";
+  return `下载失败（${target}）：${detail}${hint}`;
 }
