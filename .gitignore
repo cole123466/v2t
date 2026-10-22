@@ -41,6 +41,10 @@ nohup.out
 # 任务数据（媒体文件与 SQLite 库不入库）
 /data
 
+# 外部参考工程索引
+.projectindex/
+.projetcIndex/
+
 # ZCode 本地会话配置
 /.zcode
 
@@ -53,5 +57,3 @@ next-env.d.ts
 .scratch/*.log
 .scratch/*.html
 .scratch/msg.txt
-.projetcIndex/
-.projectindex/
