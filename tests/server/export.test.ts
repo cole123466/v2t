@@ -51,6 +51,7 @@ describe("Markdown 导出", () => {
     expect(md).toContain("第一句 [^source-1]");
     expect(md).not.toContain("[[t01]]");
     expect(md).not.toContain("[[f00]]");
+    expect(md).not.toMatch(/\[\[[tf]\d{2,}\]\]/);
   });
 
   it("画面渲染为相对路径图片与图注", () => {

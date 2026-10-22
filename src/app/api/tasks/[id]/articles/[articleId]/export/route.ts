@@ -92,6 +92,8 @@ export async function GET(
       headers: {
         "content-type": "text/markdown; charset=utf-8",
         "content-disposition": attachment(safeName(title, ".md")),
+        // 避免浏览器复用旧版导出文件（引用格式曾变更）
+        "cache-control": "no-store",
       },
     });
   }
@@ -126,6 +128,7 @@ export async function GET(
     headers: {
       "content-type": "application/zip",
       "content-disposition": attachment(safeName(title, ".zip")),
+      "cache-control": "no-store",
     },
   });
 }
