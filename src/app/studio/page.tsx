@@ -41,6 +41,15 @@ function fmtSize(n: number) {
   return `${Math.max(1, Math.round(n / 1024))} KB`;
 }
 
+/** 任务列表与存储占用总是一起刷新，抽成一次请求组合供首屏轮询与手动刷新复用 */
+async function fetchDashboard(): Promise<{ tasks: Task[] | null; stats: StorageStats | null }> {
+  const tasksRes = await fetch("/api/tasks");
+  const tasks = tasksRes.ok ? ((await tasksRes.json()) as { tasks: Task[] }).tasks : null;
+  const storageRes = await fetch("/api/storage");
+  const stats = storageRes.ok ? ((await storageRes.json()) as StorageStats) : null;
+  return { tasks, stats };
+}
+
 export default function StudioPage() {
   const router = useRouter();
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -58,13 +67,9 @@ export default function StudioPage() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
-    const res = await fetch("/api/tasks");
-    if (res.ok) {
-      const data = (await res.json()) as { tasks: Task[] };
-      setTasks(data.tasks);
-    }
-    const statRes = await fetch("/api/storage");
-    if (statRes.ok) setStats((await statRes.json()) as StorageStats);
+    const { tasks, stats } = await fetchDashboard();
+    if (tasks) setTasks(tasks);
+    if (stats) setStats(stats);
   }, []);
 
   const removeTask = useCallback(
@@ -86,10 +91,20 @@ export default function StudioPage() {
   );
 
   useEffect(() => {
-    void refresh();
-    const timer = setInterval(() => void refresh(), 4000);
-    return () => clearInterval(timer);
-  }, [refresh]);
+    let cancelled = false;
+    const tick = async () => {
+      const { tasks, stats } = await fetchDashboard();
+      if (cancelled) return;
+      if (tasks) setTasks(tasks);
+      if (stats) setStats(stats);
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
 
   const probeLink = useCallback(async () => {
     const url = linkUrl.trim();

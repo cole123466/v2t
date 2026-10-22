@@ -22,9 +22,9 @@ export function Waveform({
   useEffect(() => {
     let cancelled = false;
     let ctx: AudioContext | null = null;
-    setStatus("loading");
     peaksRef.current = null;
     (async () => {
+      setStatus("loading");
       const res = await fetch(audioSrc);
       if (!res.ok) throw new Error("audio fetch failed");
       const raw = await res.arrayBuffer();

@@ -1,6 +1,5 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import path from "node:path";
 import { Readable } from "node:stream";
 import { sourcePath, taskDir } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";

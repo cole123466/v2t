@@ -14,7 +14,6 @@ import {
 let dir: string;
 let db: Db;
 let store: GenerationStore;
-let service: GenerationService;
 
 /** 假 LLM：分片推流并记录收到的 messages */
 type ChatMessage = LLMMessage;

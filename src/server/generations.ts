@@ -3,7 +3,7 @@ import { TEMPLATE_META } from "@/lib/templates";
 import { getLlmConfig } from "./config";
 import type { Db } from "./db";
 import { bind, row as one, rows as many } from "./sql";
-import type { Transcript, TranscriptSegment } from "./asr";
+import type { Transcript } from "./asr";
 
 export interface Generation {
   id: string;

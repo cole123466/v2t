@@ -411,8 +411,3 @@ function normalizeArticleCitations(sections: ArticleSection[]): ArticleSection[]
     })),
   }));
 }
-
-/** 从模型输出中取 JSON 主体（容忍围栏、截断与未转义引号） */
-function jsonEnvelope(raw: string): string {
-  return looseJsonBody(raw);
-}

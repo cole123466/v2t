@@ -36,8 +36,12 @@ export function PromptPanel({
   }, [taskId]);
 
   useEffect(() => {
-    void refreshHistory();
-  }, [refreshHistory]);
+    fetch(`/api/tasks/${taskId}/generations`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { generations: Generation[] } | null) => {
+        if (data) setHistory(data.generations);
+      });
+  }, [taskId]);
 
   // 流式输出时自动滚到底部
   useEffect(() => {
