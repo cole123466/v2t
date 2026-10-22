@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { Loader, MessageCircleQuestion, Send, X } from "lucide-react";
 import type { QaMessage } from "@/server/qa";
 import { clock } from "@/lib/time";
+import { RequestIdLine } from "./request-id";
 
 export function QaPanel({
   taskId,
@@ -16,6 +17,7 @@ export function QaPanel({
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [requestId, setRequestId] = useState<string | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   const [streamText, setStreamText] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -44,6 +46,7 @@ export function QaPanel({
     if (!text || busy) return;
     setBusy(true);
     setError(null);
+    setRequestId(null);
     setPendingQuestion(text);
     setStreamText("");
     setQuestion("");
@@ -55,6 +58,7 @@ export function QaPanel({
       });
       if (!res.ok || !res.body) {
         const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        setRequestId(res.headers.get("x-request-id"));
         setError(data?.error ?? `提问失败（${res.status}）`);
         return;
       }
@@ -77,6 +81,11 @@ export function QaPanel({
           } else if (event === "done") {
             setMessages((cur) => [...cur, data as unknown as QaMessage]);
           } else if (event === "error") {
+            setRequestId(
+              typeof data.request_id === "string"
+                ? data.request_id
+                : res.headers.get("x-request-id"),
+            );
             setError(String(data.message ?? "提问失败"));
           }
         }
@@ -170,7 +179,10 @@ export function QaPanel({
         {error ? (
           <div className="flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] leading-relaxed text-danger/90">
             <X className="mt-0.5 size-3 shrink-0" strokeWidth={1.5} />
-            <span className="min-w-0 break-words">{error}</span>
+            <span className="min-w-0 break-words">
+              {error}
+              <RequestIdLine id={requestId} />
+            </span>
           </div>
         ) : null}
         <div ref={bottomRef} />

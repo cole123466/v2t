@@ -5,6 +5,7 @@ import { Archive, ChevronRight, Download, FileText, Loader, RotateCcw, X } from 
 import type { MindMapNode } from "@/server/article";
 import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
 import { ArticleBlockView } from "./article-block";
+import { RequestIdLine } from "./request-id";
 
 const DETAIL_OPTIONS: Array<{ value: ArticleDetailLevel; label: string; hint: string }> = [
   { value: "concise", label: "速览", hint: "800 字内，只留核心" },
@@ -72,6 +73,7 @@ export function ArticlePanel({
   const [streamText, setStreamText] = useState("");
   const [stage, setStage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [requestId, setRequestId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<ArticleDetailLevel>("standard");
   const [purpose, setPurpose] = useState("");
@@ -122,6 +124,7 @@ export function ArticlePanel({
     if (busy) return;
     setBusy(true);
     setError(null);
+    setRequestId(null);
     setStreamText("");
     setStage("准备中");
     try {
@@ -132,6 +135,7 @@ export function ArticlePanel({
       });
       if (!res.ok || !res.body) {
         const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        setRequestId(res.headers.get("x-request-id"));
         setError(data?.error ?? `生成失败（${res.status}）`);
         return;
       }
@@ -160,6 +164,11 @@ export function ArticlePanel({
             setSelected(String((data as { id?: string }).id ?? ""));
           } else if (event === "error") {
             const problems = Array.isArray(data.problems) ? (data.problems as Array<{ field: string; message: string }>) : [];
+            setRequestId(
+              typeof data.request_id === "string"
+                ? data.request_id
+                : res.headers.get("x-request-id"),
+            );
             setError(
               problems.length > 0
                 ? `${String(data.message)}：${problems.map((p) => p.message).join("；")}`
@@ -283,7 +292,10 @@ export function ArticlePanel({
         {error ? (
           <div className="mt-2 flex items-start gap-2 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] leading-relaxed text-danger/90">
             <X className="mt-0.5 size-3 shrink-0" strokeWidth={1.5} />
-            <span className="min-w-0 break-words">{error}</span>
+            <span className="min-w-0 break-words">
+              {error}
+              <RequestIdLine id={requestId} />
+            </span>
           </div>
         ) : null}
       </div>

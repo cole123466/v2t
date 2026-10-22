@@ -6,6 +6,7 @@ import { Check, Copy, Download, FileText, Loader, PenLine, Sparkle } from "lucid
 import type { Generation } from "@/server/generations";
 import { TEMPLATE_META } from "@/lib/templates";
 import { WaveBars } from "@/components/landing/wave-bars";
+import { RequestIdLine } from "./request-id";
 
 type Phase = "idle" | "streaming" | "error";
 
@@ -21,6 +22,7 @@ export function PromptPanel({
   const [phase, setPhase] = useState<Phase>("idle");
   const [streamText, setStreamText] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [requestId, setRequestId] = useState<string | null>(null);
   const [history, setHistory] = useState<Generation[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -59,6 +61,7 @@ export function PromptPanel({
     setPhase("streaming");
     setStreamText("");
     setError(null);
+    setRequestId(null);
     setActiveId(null);
 
     try {
@@ -71,6 +74,7 @@ export function PromptPanel({
       });
       if (!res.ok || !res.body) {
         const detail = (await res.json().catch(() => null)) as { error?: string } | null;
+        setRequestId(res.headers.get("x-request-id"));
         throw new Error(detail?.error ?? `请求失败（${res.status}）`);
       }
 
@@ -101,6 +105,11 @@ export function PromptPanel({
             setOverlay(true);
             setTimeout(() => setOverlay(false), 2000);
           } else if (event === "error") {
+            setRequestId(
+              typeof payload.request_id === "string"
+                ? payload.request_id
+                : res.headers.get("x-request-id"),
+            );
             throw new Error(String(payload.message ?? "生成失败"));
           }
         }
@@ -190,9 +199,10 @@ export function PromptPanel({
       </button>
 
       {error ? (
-        <p className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs leading-relaxed text-danger/90">
+        <div className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-xs leading-relaxed text-danger/90">
           {error}
-        </p>
+          <RequestIdLine id={requestId} />
+        </div>
       ) : null}
 
       {(activeOutput || phase === "streaming") && (
