@@ -1,0 +1,16 @@
+# 统一换行符：Linux 发布包与 git 协作都按 LF 存储
+* text=auto eol=lf
+
+# Windows 批处理必须是 CRLF，否则 cmd 解析行尾会出现异常
+*.bat text eol=crlf
+
+# 二进制资源不做换行转换
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.mp4 binary
+*.mp3 binary
+*.woff binary
+*.woff2 binary

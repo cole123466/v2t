@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+@theme {
+  /* 暗色影院 · 色板 */
+  --color-ink-950: #060608;
+  --color-ink-900: #0a0a0e;
+  --color-ink-800: #121218;
+  --color-ink-700: #1b1b24;
+  --color-paper: #ece9e2;
+  --color-paper-dim: #a6a29a;
+  --color-paper-faint: #6d6a64;
+  --color-gold: #d9a441;
+  --color-gold-deep: #a87a28;
+  /* 语义色：成功 / 危险（暗色影院语境下的低饱和） */
+  --color-positive: #7fbf9a;
+  --color-danger: #d98b8b;
+
+  /* 字体：display 衬线（英文巨字 + 中文大字事件），正文系统无衬线 */
+  --font-display: "Playfair Display", "Noto Serif SC", ui-serif, Georgia, serif;
+  --font-sans: "Segoe UI", system-ui, -apple-system, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, "JetBrains Mono",
+    monospace;
+
+  /* 动效节奏 */
+  --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 波形呼吸（landing 与工作台共用视觉锚） */
+@keyframes wave-pulse {
+  0%,
+  100% {
+    transform: scaleY(0.25);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wave-bar {
+    animation: none !important;
+    transform: scaleY(0.4);
+  }
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-ink-950);
+  color: var(--color-paper);
+}
+
+::selection {
+  background: var(--color-gold);
+  color: var(--color-ink-950);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-ink-700) transparent;
+}
+
+/* 玻璃质感 */
+@utility glass {
+  background: rgb(255 255 255 / 0.04);
+  border: 1px solid rgb(255 255 255 / 0.08);
+  backdrop-filter: blur(20px);
+}
+
+/* 胶片噪点覆盖层（挂在布局最外层，pointer-events 穿透） */
+.grain-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0.045;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+}
