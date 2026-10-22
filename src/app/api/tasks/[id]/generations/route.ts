@@ -57,8 +57,24 @@ export async function POST(
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      let closed = false;
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // 客户端已断开，流已被关闭
+        }
+      };
       const send = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          // 客户端已断开：停止写入，避免 uncaughtException
+          closed = true;
+        }
       };
       try {
         const gen = await generationService.generateForTask(id, transcript, body, (delta) =>
@@ -68,7 +84,7 @@ export async function POST(
       } catch (err) {
         send("error", { message: err instanceof Error ? err.message : String(err) });
       } finally {
-        controller.close();
+        close();
       }
     },
   });
