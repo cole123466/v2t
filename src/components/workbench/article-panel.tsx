@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type RefObject } from "react";
 import Image from "next/image";
 import { ChevronRight, Download, FileText, Loader, RotateCcw, X } from "lucide-react";
-import type { Article, MindMapNode } from "@/server/article";
+import type { MindMapNode } from "@/server/article";
 import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
 import { clock } from "@/lib/time";
 
@@ -181,6 +181,27 @@ function MindMapTree({
   );
 }
 
+/** 导出用：把画面帧读成 data URL，写进 Markdown 后离线也能显示，且不暴露服务端路径 */
+async function frameDataUrl(taskId: string, frameId: string): Promise<string | null> {
+  const res = await fetch(`/api/tasks/${taskId}/frames/${frameId}`);
+  if (!res.ok) return null;
+  const blob = await res.blob();
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** 内容导图 → 嵌套无序列表 */
+function mindMapLines(nodes: MindMapNode[], depth = 0): string[] {
+  return nodes.flatMap((node) => [
+    `${"  ".repeat(depth)}- ${node.label}`,
+    ...(node.children?.length ? mindMapLines(node.children, depth + 1) : []),
+  ]);
+}
+
 export function ArticlePanel({
   taskId,
   videoRef,
@@ -197,6 +218,7 @@ export function ArticlePanel({
   const [detail, setDetail] = useState<ArticleDetailLevel>("standard");
   const [purpose, setPurpose] = useState("");
   const [citationTimes, setCitationTimes] = useState<Map<string, number>>(new Map());
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     void fetch(`/api/tasks/${taskId}/citations`)
@@ -296,35 +318,83 @@ export function ArticlePanel({
     }
   };
 
-  const exportMarkdown = (article: Article) => {
-    const lines = [`# ${article.title}`, ""];
-    for (const section of article.sections) {
-      lines.push(`## ${section.title}`, "");
-      for (const block of section.blocks) {
-        const frames = Array.from(
-          new Set(Array.from(block.text.matchAll(/\[\[(f\d{2,})\]\]/g), (m) => m[1])),
-        );
-        const text = block.text
-          .replace(/\[\[f\d{2,}\]\]/g, "")
-          .replace(/[ \t]{2,}/g, " ")
-          .trim();
-        if (text) lines.push(text, "");
-        for (const id of frames) {
-          lines.push(`![画面 ${id}](/api/tasks/${taskId}/frames/${id})`, "");
+  const exportMarkdown = async (record: ArticleRecord) => {
+    const article = record.content;
+    if (!article || exporting) return;
+    setExporting(true);
+    try {
+      // 画面帧取成内嵌 data URL：离线可看、不暴露 /api 路径与任务 id
+      const frameIds = Array.from(
+        new Set(
+          article.sections.flatMap((section) =>
+            section.blocks.flatMap((block) =>
+              Array.from(block.text.matchAll(/\[\[(f\d{2,})\]\]/g), (m) => m[1]),
+            ),
+          ),
+        ),
+      );
+      const images = new Map<string, string>();
+      await Promise.all(
+        frameIds.map(async (id) => {
+          const dataUrl = await frameDataUrl(taskId, id);
+          if (dataUrl) images.set(id, dataUrl);
+        }),
+      );
+
+      const lines: string[] = [];
+      const depthLabel =
+        record.detailLevel === "concise" ? "速览" : record.detailLevel === "detailed" ? "深入" : "标准";
+      const stamp = new Date(record.createdAt).toLocaleString("zh-CN");
+      lines.push(`# ${article.title}`, "");
+      lines.push(
+        `> V2T 图文导出 · ${stamp} · ${depthLabel}${record.purpose ? ` · 关注点：${record.purpose}` : ""} · ${record.model}`,
+        "",
+      );
+
+      for (const section of article.sections) {
+        lines.push(`## ${section.title}`, "");
+        for (const block of section.blocks) {
+          const frames = Array.from(
+            new Set(Array.from(block.text.matchAll(/\[\[(f\d{2,})\]\]/g), (m) => m[1])),
+          );
+          const text = block.text
+            // 时间引用还原成可读时间，画面引用由下方图片承载
+            .replace(/\[\[(t\d{2,})\]\]/g, (_, id: string) => {
+              const t = citationTimes.get(id);
+              return t === undefined ? "" : `（${clock(t)}）`;
+            })
+            .replace(/\[\[f\d{2,}\]\]/g, "")
+            .replace(/[ \t]{2,}/g, " ")
+            .trim();
+          if (text) lines.push(text, "");
+          for (const id of frames) {
+            const src = images.get(id);
+            if (!src) continue;
+            const t = citationTimes.get(id);
+            const caption = t === undefined ? `画面 ${id}` : `画面 ${id}（${clock(t)}）`;
+            lines.push(`![${caption}](${src})`, "");
+          }
         }
       }
+
+      if (article.mindMap.length > 0) {
+        lines.push("## 内容导图", "", ...mindMapLines(article.mindMap), "");
+      }
+      if (article.limitations.length > 0) {
+        lines.push("## 未确认之处", "");
+        for (const l of article.limitations) lines.push(`- ${l.text}`);
+      }
+
+      const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${article.title.replace(/[\\/:*?"<>|]/g, "-") || "article"}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
     }
-    if (article.limitations.length > 0) {
-      lines.push("## 未确认之处", "");
-      for (const l of article.limitations) lines.push(`- ${l.text}`);
-    }
-    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${article.title.replace(/[\\/:*?"<>|]/g, "-")}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   return (
@@ -338,11 +408,16 @@ export function ArticlePanel({
           {active?.content ? (
             <button
               type="button"
-              onClick={() => exportMarkdown(active.content as Article)}
-              className="inline-flex items-center gap-1 font-mono text-[10px] text-paper-faint transition-colors hover:text-gold"
+              onClick={() => void exportMarkdown(active)}
+              disabled={exporting}
+              className="inline-flex items-center gap-1 font-mono text-[10px] text-paper-faint transition-colors hover:text-gold disabled:opacity-50"
             >
-              <Download className="size-3" strokeWidth={1.5} />
-              Markdown
+              {exporting ? (
+                <Loader className="size-3 animate-spin" strokeWidth={1.5} />
+              ) : (
+                <Download className="size-3" strokeWidth={1.5} />
+              )}
+              {exporting ? "导出中" : "Markdown"}
             </button>
           ) : null}
         </div>
