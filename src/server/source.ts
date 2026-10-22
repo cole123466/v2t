@@ -4,6 +4,7 @@ import { mkdir, readdir, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import { getDownloaderConfig } from "./config";
 import { downloadBilibili, isBilibiliUrl, probeBilibili } from "./bilibili";
+import { errorFields, logInfo, logWarn } from "./log";
 
 const run = promisify(execFile);
 
@@ -88,6 +89,7 @@ export function createYtDlpProvider(): SourceProvider {
         const message = toolErrorMessage(url, (err as { stderr?: string }).stderr);
         if (isBilibiliUrl(url)) {
           // 机房 IP 常被 B 站风控拦住网页，此时改走官方内容接口
+          logWarn("link probe fallback to bilibili api", { host: new URL(url).host });
           try {
             return await probeBilibili(url);
           } catch (fallbackError) {
@@ -154,7 +156,20 @@ export function createYtDlpProvider(): SourceProvider {
         });
       } catch (err) {
         // yt-dlp 被 B 站风控（412）时，改走官方内容接口取 720P 单文件
-        if (isBilibiliUrl(url)) return downloadBilibili(url, destDir, onProgress);
+        if (isBilibiliUrl(url)) {
+          logWarn("media download fallback to bilibili api", {
+            host: new URL(url).host,
+            ...errorFields(err),
+          });
+          const media = await downloadBilibili(url, destDir, onProgress);
+          logInfo("media download completed", {
+            host: new URL(url).host,
+            ext: media.ext,
+            bytes: media.sizeBytes,
+            fallback: true,
+          });
+          return media;
+        }
         throw err;
       }
 
@@ -163,6 +178,12 @@ export function createYtDlpProvider(): SourceProvider {
       const file = `${destDir}/${files[0]}`;
       const ext = `.${files[0].split(".").pop()}`;
       const sizeBytes = (await stat(file)).size;
+      logInfo("media download completed", {
+        host: new URL(url).host,
+        ext,
+        bytes: sizeBytes,
+        fallback: false,
+      });
       return { file, ext, sizeBytes };
     },
   };

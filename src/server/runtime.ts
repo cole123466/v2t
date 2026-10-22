@@ -12,6 +12,7 @@ import { QaService, QaStore } from "./qa";
 import { TaskRunner } from "./runner";
 import { createYtDlpProvider, type SourceProvider } from "./source";
 import { TaskStore } from "./tasks";
+import { errorFields, logError, logInfo, logWarn } from "./log";
 
 export interface Runtime extends MaintenanceDeps {
   db: Db;
@@ -77,15 +78,29 @@ export function getRuntime(): Runtime {
     };
     globalForV2t.__v2tRuntime = runtime;
 
+    logInfo("runtime initialised", {
+      data_dir: dataDir,
+      retention_days: getRetentionDays(),
+      node: process.version,
+    });
+
     // 启动收口：孤儿任务标记失败（串行队列是内存态，重启即丢失）
-    failOrphanTasks(store);
+    const orphans = failOrphanTasks(store);
+    if (orphans > 0) logWarn("orphan tasks marked failed", { count: orphans });
 
     // 媒体保留期清理：启动时一次 + 每日一次（转录与文案永久保留）
     const deps: MaintenanceDeps = { store, generations, articles, activities, qa, dataDir };
     const runPurge = () =>
-      purgeExpiredMedia(deps, { retentionDays: getRetentionDays() }).catch((err) =>
-        console.error("[v2t] 媒体清理失败：", err),
-      );
+      purgeExpiredMedia(deps, { retentionDays: getRetentionDays() })
+        .then((count) => {
+          logInfo("media purge completed", {
+            removed: count,
+            retention_days: getRetentionDays(),
+          });
+        })
+        .catch((err) => {
+          logError("media purge failed", errorFields(err));
+        });
     void runPurge();
     if (!globalForV2t.__v2tPurgeTimer) {
       globalForV2t.__v2tPurgeTimer = setInterval(() => void runPurge(), PURGE_INTERVAL_MS);

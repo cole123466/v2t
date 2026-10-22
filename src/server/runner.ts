@@ -11,6 +11,7 @@ import { audioPath, sourcePath, taskDir, transcriptPath } from "./paths";
 import { extractOverviewFrames } from "./frames";
 import type { SourceProvider } from "./source";
 import type { Task, TaskPatch, TaskStore } from "./tasks";
+import { elapsedMs, errorFields, logError, logInfo, logWarn } from "./log";
 
 type Listener = (task: Task) => void;
 
@@ -87,6 +88,12 @@ export class TaskRunner {
     const task = this.opts.store.get(taskId);
     if (!task) return;
     const dir = taskDir(this.opts.dataDir, taskId);
+    const startedAt = Date.now();
+    logInfo("task processing started", {
+      task_id: taskId,
+      source_kind: task.sourceKind,
+      ext: task.ext,
+    });
     try {
       let ext = task.ext;
 
@@ -95,6 +102,7 @@ export class TaskRunner {
         if (!this.opts.source) throw new Error("未配置下载器");
         if (!task.sourceUrl) throw new Error("链接任务缺少来源地址");
         this.patch(taskId, { status: "downloading", progress: 5, downloadPct: 0 });
+        const downloadAt = Date.now();
         await mkdir(dir, { recursive: true });
         const media = await this.opts.source.fetch(task.sourceUrl, dir, (p) => {
           const pct =
@@ -114,12 +122,25 @@ export class TaskRunner {
           downloadPct: 100,
           progress: 20,
         });
+        logInfo("media downloaded", {
+          task_id: taskId,
+          ext,
+          bytes: media.sizeBytes,
+          duration_ms: elapsedMs(downloadAt),
+        });
       }
 
       const source = sourcePath(dir, ext);
+      const probeAt = Date.now();
       const info = await probe(source);
       if (!info.hasAudio) throw new Error("文件中没有检测到音轨");
       this.patch(taskId, { durationSec: info.durationSec });
+      logInfo("media probed", {
+        task_id: taskId,
+        duration_sec: info.durationSec,
+        has_audio: info.hasAudio,
+        duration_ms: elapsedMs(probeAt),
+      });
 
       // 阶段 2：字幕优先（容器内字幕轨道），不可用则 ASR 兜底
       this.patch(taskId, { status: "fetching-subtitles", progress: 30 });
@@ -132,8 +153,14 @@ export class TaskRunner {
           text: c.text,
         }));
         await this.writeTranscript(dir, info.durationSec, segments, undefined, false);
+        logInfo("subtitle track selected", {
+          task_id: taskId,
+          cues: cues.length,
+          segments: segments.length,
+        });
         this.patch(taskId, { status: "extracting-frames", progress: 88, transcriptOrigin: "subtitle" });
       } else {
+        logInfo("subtitle track unavailable; falling back to asr", { task_id: taskId });
         const audio = audioPath(dir);
         this.patch(taskId, { status: "extracting", progress: 35 });
         await extractAudio(source, audio);
@@ -152,7 +179,15 @@ export class TaskRunner {
         try {
           for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
+            const chunkAt = Date.now();
             const part = await this.opts.asr.transcribe(chunk.file);
+            logInfo("asr chunk completed", {
+              task_id: taskId,
+              chunk: i + 1,
+              chunks: chunks.length,
+              segments: part.segments.length,
+              duration_ms: elapsedMs(chunkAt),
+            });
             timestampsMissing ||= part.timestampsMissing;
             language ??= part.language;
             for (const seg of part.segments) {
@@ -177,10 +212,18 @@ export class TaskRunner {
 
         segments.sort((a, b) => a.start - b.start);
         await this.writeTranscript(dir, info.durationSec, segments, language, timestampsMissing);
+        logInfo("transcript ready", {
+          task_id: taskId,
+          origin: "asr",
+          segments: segments.length,
+          language,
+          timestamps_missing: timestampsMissing,
+        });
         this.patch(taskId, { status: "extracting-frames", progress: 88, transcriptOrigin: "asr" });
       }
 
       // 阶段 3：全景帧（失败不阻塞就绪——抽帧只影响文章与画面问答）
+      const framesAt = Date.now();
       try {
         await extractOverviewFrames(
           source,
@@ -188,15 +231,27 @@ export class TaskRunner {
           info.durationSec,
           this.opts.overviewFrames ?? DEFAULT_OVERVIEW_FRAMES,
         );
+        logInfo("overview frames ready", {
+          task_id: taskId,
+          duration_ms: elapsedMs(framesAt),
+        });
       } catch (err) {
-        console.error(`[v2t] 抽帧失败（${taskId}）：`, err);
+        logWarn("overview frame extraction failed", {
+          task_id: taskId,
+          ...errorFields(err),
+          duration_ms: elapsedMs(framesAt),
+        });
       }
 
       this.patch(taskId, { status: "ready", progress: 100 });
+      logInfo("task ready", { task_id: taskId, duration_ms: elapsedMs(startedAt) });
     } catch (err) {
-      this.patch(taskId, {
-        status: "failed",
-        error: err instanceof Error ? err.message : String(err),
+      const message = err instanceof Error ? err.message : String(err);
+      this.patch(taskId, { status: "failed", error: message });
+      logError("task failed", {
+        task_id: taskId,
+        ...errorFields(err),
+        duration_ms: elapsedMs(startedAt),
       });
     }
   }

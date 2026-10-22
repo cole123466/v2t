@@ -69,6 +69,8 @@ scripts\start-prod.bat
 | `MAX_UPLOAD_GB` | 上传上限 | `2` |
 | `MEDIA_RETENTION_DAYS` | 媒体保留天数 | `7` |
 | `DATA_DIR` | 数据库与任务媒体目录 | `./data` |
+| `LOG_LEVEL` | 日志级别：`debug` / `info` / `warn` / `error` | `info` |
+| `LOG_STACK` | 设为 `1` 时错误日志附带堆栈 | 空 |
 | `ALLOWED_DEV_ORIGINS` | 仅开发模式：允许的远程 host（逗号分隔，不入库） | 空 |
 
 ### 关于 B 站下载
@@ -98,6 +100,15 @@ bash scripts/ci.sh   # 或 npm run ci
 ```
 
 依次执行 lint → typecheck → test → build，任一步失败立即退出；首次运行会先 `npm ci`。只产出可部署构建，不配置远端、不自动部署。构建默认限制 1G 堆内存，构建期间建议停掉 `next dev` 以避开内存峰值。
+
+## 日志
+
+服务端输出 logfmt 单行日志（`时间 level=INFO msg="..." key=value`），写到 stdout/stderr：
+
+- 覆盖任务管线、上传 / 链接导入、ASR、LLM 调用、图文文章、问答、文案生成与媒体清理
+- 只记录事件和上下文（task_id、model、耗时、字节数等），不记录提示词、转写稿或 API Key
+- `LOG_LEVEL=debug` 可看逐段 ASR / 抽帧细节；`LOG_STACK=1` 让错误日志附带堆栈
+- 生产环境交给 journald，或直接重定向：`bash scripts/start-prod.sh --skip-build > app.log 2>&1`
 
 ## 技术栈
 

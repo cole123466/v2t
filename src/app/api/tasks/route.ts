@@ -7,6 +7,7 @@ import { pipeline } from "node:stream/promises";
 import { getMaxUploadBytes } from "@/server/config";
 import { sourcePath, taskDir } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
+import { logInfo, logWarn } from "@/server/log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,15 +48,32 @@ export async function POST(req: Request) {
     );
   } catch {
     store.update(task.id, { status: "failed", error: "上传中断，文件不完整" });
+    logWarn("upload interrupted", {
+      task_id: task.id,
+      file: originalName,
+      bytes: sizeBytes,
+    });
     return fail("上传中断", 500);
   }
 
   const actual = await stat(dest).then((s) => s.size).catch(() => -1);
   if (actual !== sizeBytes) {
     store.update(task.id, { status: "failed", error: "上传不完整，请重试" });
+    logWarn("upload incomplete", {
+      task_id: task.id,
+      file: originalName,
+      expected_bytes: sizeBytes,
+      actual_bytes: actual,
+    });
     return fail("上传不完整", 500);
   }
 
+  logInfo("upload accepted", {
+    task_id: task.id,
+    file: originalName,
+    bytes: sizeBytes,
+    ext,
+  });
   runner.enqueue(task.id);
   return Response.json(task, { status: 201 });
 }

@@ -6,6 +6,7 @@ import { readFrameManifest } from "@/server/frames";
 import { taskDir, transcriptPath } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
 import type { ArticleDetailLevel } from "@/server/articles";
+import { errorFields, logError } from "@/server/log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -103,6 +104,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         send("done", rt.articles.get(record.id) ?? record);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        logError("article request failed", { task_id: id, ...errorFields(err) });
         rt.activities.finish(activity.id, { ok: false, message });
         send("error", { message });
       } finally {

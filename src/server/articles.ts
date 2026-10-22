@@ -3,6 +3,7 @@ import { getLlmConfig } from "./config";
 import type { Db } from "./db";
 import { bind, row as one, rows as many } from "./sql";
 import type { LLMMessage, LLMProvider } from "./generations";
+import { elapsedMs, errorFields, logError, logInfo, logWarn } from "./log";
 import {
   looseJsonBody,
   normalizeArticle,
@@ -270,25 +271,42 @@ export class ArticleService {
   async generate(input: GenerateArticleInput): Promise<ArticleRecord> {
     const detail = input.detailLevel ?? "standard";
     const purpose = input.purpose?.trim() || null;
+    const startedAt = Date.now();
     const record = this.opts.store.create({
       taskId: input.taskId,
       detailLevel: detail,
       purpose,
       model: getLlmConfig().model,
     });
+    logInfo("article generation started", {
+      task_id: input.taskId,
+      article_id: record.id,
+      detail,
+      has_purpose: purpose !== null,
+      frames: input.catalog.frames.length,
+      segments: input.catalog.transcripts.length,
+    });
 
     try {
       // 第一步：提纲
       input.onProgress?.({ stage: "outline" });
+      const outlineAt = Date.now();
       const outlineRaw = await this.opts.llm.generate(
         [
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: outlinePrompt(input.catalog, detail, purpose) },
         ],
         () => {},
+        { operation: "article.outline", taskId: input.taskId },
       );
       const outline = this.parseOutline(outlineRaw);
       this.opts.store.update(record.id, { outline, title: outline.title });
+      logInfo("article outline ready", {
+        task_id: input.taskId,
+        article_id: record.id,
+        sections: outline.sections.length,
+        duration_ms: elapsedMs(outlineAt),
+      });
 
       // 第二步：逐章生成（每章一次调用，带该章相关画面）
       const sections = [] as Article["sections"];
@@ -298,6 +316,7 @@ export class ArticleService {
           stage: "section",
           message: `${i + 1}/${outline.sections.length} ${section.title}`,
         });
+        const sectionAt = Date.now();
         const images = await this.pickSectionFrames(
           i,
           outline.sections.length,
@@ -342,7 +361,10 @@ export class ArticleService {
                   { role: "user", content },
                   { role: "user", content: retryNote },
                 ];
-          const raw = await this.opts.llm.generate(messages, (delta) => input.onDelta?.(delta));
+          const raw = await this.opts.llm.generate(messages, (delta) => input.onDelta?.(delta), {
+            operation: "article.section",
+            taskId: input.taskId,
+          });
           try {
             parsed = JSON.parse(looseJsonBody(raw)) as SectionPayload;
             const normalized = normalizeArticle({
@@ -362,6 +384,14 @@ export class ArticleService {
               blockProblems = issues.slice(0, 5).map((p) => p.message);
               lastError = null;
               parsed = null;
+              logWarn("article section retry", {
+                task_id: input.taskId,
+                article_id: record.id,
+                section: section.id,
+                attempt: attempt + 1,
+                reason: "invalid_blocks",
+                problems: blockProblems.length,
+              });
               continue;
             }
             parsedBlocks = normalized.sections[0].blocks;
@@ -369,6 +399,13 @@ export class ArticleService {
             lastError = err instanceof Error ? err : new Error(String(err));
             blockProblems = [];
             parsed = null;
+            logWarn("article section retry", {
+              task_id: input.taskId,
+              article_id: record.id,
+              section: section.id,
+              attempt: attempt + 1,
+              reason: "invalid_json",
+            });
           }
         }
         if (!parsedBlocks || !parsed) {
@@ -380,6 +417,16 @@ export class ArticleService {
           id: section.id,
           title: parsed.title?.trim() || section.title,
           blocks: parsedBlocks,
+        });
+        logInfo("article section ready", {
+          task_id: input.taskId,
+          article_id: record.id,
+          section: section.id,
+          index: i + 1,
+          total: outline.sections.length,
+          blocks: parsedBlocks.length,
+          images: images.length,
+          duration_ms: elapsedMs(sectionAt),
         });
       }
 
@@ -403,10 +450,23 @@ export class ArticleService {
         );
       }
       this.opts.store.update(record.id, { content: article, status: "done", title: article.title });
+      logInfo("article generation completed", {
+        task_id: input.taskId,
+        article_id: record.id,
+        sections: article.sections.length,
+        blocks: article.sections.reduce((sum, section) => sum + section.blocks.length, 0),
+        duration_ms: elapsedMs(startedAt),
+      });
       return { ...record, outline, content: article, status: "done", title: article.title };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.opts.store.update(record.id, { status: "failed", error: message });
+      logError("article generation failed", {
+        task_id: input.taskId,
+        article_id: record.id,
+        ...errorFields(err),
+        duration_ms: elapsedMs(startedAt),
+      });
       throw err;
     }
   }

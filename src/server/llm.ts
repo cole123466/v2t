@@ -1,5 +1,6 @@
 import { getLlmConfig, getVisionModel } from "./config";
-import type { LLMMessage, LLMProvider } from "./generations";
+import type { LLMCallMeta, LLMMessage, LLMProvider } from "./generations";
+import { elapsedMs, errorFields, logError, logInfo, logWarn } from "./log";
 
 /** 消息里带图片块时改用视觉模型 */
 function pickModel(messages: LLMMessage[]): string {
@@ -16,15 +17,25 @@ function pickModel(messages: LLMMessage[]): string {
  */
 export function createOpenAiCompatibleLlm(): LLMProvider {
   return {
-    async generate(messages: LLMMessage[], onChunk: (delta: string) => void): Promise<string> {
+    async generate(
+      messages: LLMMessage[],
+      onChunk: (delta: string) => void,
+      meta?: LLMCallMeta,
+    ): Promise<string> {
       // 个别模型只输出思维链不出正文：自动重试一次，仍为空才报错
       let lastError: Error | null = null;
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          return await streamOnce(messages, onChunk);
+          return await streamOnce(messages, onChunk, meta);
         } catch (err) {
           lastError = err instanceof Error ? err : new Error(String(err));
           if (!/没有返回正文内容/.test(lastError.message)) throw lastError;
+          logWarn("model response empty; retrying", {
+            provider: "llm",
+            operation: meta?.operation,
+            task_id: meta?.taskId,
+            attempt: attempt + 1,
+          });
         }
       }
       throw lastError ?? new Error("LLM 调用失败");
@@ -35,24 +46,50 @@ export function createOpenAiCompatibleLlm(): LLMProvider {
 async function streamOnce(
   messages: LLMMessage[],
   onChunk: (delta: string) => void,
+  meta?: LLMCallMeta,
 ): Promise<string> {
   const { apiKey, baseUrl } = getLlmConfig();
   if (!apiKey) throw new Error("未配置 LLM_API_KEY");
 
-  const res = await fetch(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: pickModel(messages),
-      messages,
-      stream: true,
-    }),
-  });
+  const startedAt = Date.now();
+  const model = pickModel(messages);
+  const fields = {
+    provider: "llm",
+    model,
+    operation: meta?.operation,
+    task_id: meta?.taskId,
+    messages: messages.length,
+    images: messages.reduce(
+      (count, message) =>
+        count +
+        (Array.isArray(message.content)
+          ? message.content.filter((part) => part.type === "image_url").length
+          : 0),
+      0,
+    ),
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ model, messages, stream: true }),
+    });
+  } catch (err) {
+    logError("model request failed", { ...fields, ...errorFields(err), duration_ms: elapsedMs(startedAt) });
+    throw err;
+  }
   if (!res.ok || !res.body) {
     const detail = await res.text().catch(() => "");
+    logWarn("model service HTTP failure", {
+      ...fields,
+      http_status: res.status,
+      duration_ms: elapsedMs(startedAt),
+    });
     throw new Error(`LLM 服务返回 ${res.status}：${detail.slice(0, 200)}`);
   }
 
@@ -89,7 +126,13 @@ async function streamOnce(
   }
   // 只输出思维链、没有正文时，空串会让上层 JSON 解析报出难懂的错
   if (!full.trim()) {
+    logWarn("model response empty", { ...fields, duration_ms: elapsedMs(startedAt) });
     throw new Error("模型没有返回正文内容（可能只生成了推理过程），请重试或更换模型");
   }
+  logInfo("model response completed", {
+    ...fields,
+    chars: full.length,
+    duration_ms: elapsedMs(startedAt),
+  });
   return full;
 }

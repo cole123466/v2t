@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import type { Transcript } from "@/server/asr";
 import { taskDir, transcriptPath } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
+import { errorFields, logError } from "@/server/log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,6 +63,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         send("done", result.message);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        logError("qa request failed", { task_id: id, ...errorFields(err) });
         rt.activities.finish(activity.id, { ok: false, message });
         send("error", { message });
       } finally {

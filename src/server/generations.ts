@@ -4,6 +4,7 @@ import { getLlmConfig } from "./config";
 import type { Db } from "./db";
 import { bind, row as one, rows as many } from "./sql";
 import type { Transcript } from "./asr";
+import { elapsedMs, errorFields, logError, logInfo } from "./log";
 
 export interface Generation {
   id: string;
@@ -126,8 +127,14 @@ export interface LLMMessage {
   content: string | LLMContentPart[];
 }
 
+/** 日志用上下文：不参与请求内容，只用于把模型调用归到具体任务/操作 */
+export interface LLMCallMeta {
+  operation?: string;
+  taskId?: string;
+}
+
 export interface LLMProvider {
-  generate(messages: LLMMessage[], onChunk: (delta: string) => void): Promise<string>;
+  generate(messages: LLMMessage[], onChunk: (delta: string) => void, meta?: LLMCallMeta): Promise<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,12 +199,21 @@ export class GenerationService {
         ? template!.buildPrompt(transcriptText)
         : `${input.prompt}\n\n转录稿：\n${transcriptText}`;
 
+    const startedAt = Date.now();
     const gen = this.opts.store.create({
       taskId,
       mode: input.mode,
       templateId: template?.id ?? null,
       prompt: input.mode === "manual" ? (input.prompt ?? null) : null,
       model: getLlmConfig().model,
+    });
+    logInfo("copywriting generation started", {
+      task_id: taskId,
+      generation_id: gen.id,
+      mode: input.mode,
+      template: template?.id,
+      prompt_chars: input.mode === "manual" ? (input.prompt?.length ?? 0) : 0,
+      transcript_segments: transcript.segments.length,
     });
 
     try {
@@ -210,12 +226,25 @@ export class GenerationService {
           gen.output += delta;
           onChunk?.(delta);
         },
+        { operation: `copywriting.${input.mode}`, taskId },
       );
       this.opts.store.update(gen.id, { output, status: "done" });
+      logInfo("copywriting generation completed", {
+        task_id: taskId,
+        generation_id: gen.id,
+        chars: output.length,
+        duration_ms: elapsedMs(startedAt),
+      });
       return { ...gen, output, status: "done" };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.opts.store.update(gen.id, { status: "failed", error: message });
+      logError("copywriting generation failed", {
+        task_id: taskId,
+        generation_id: gen.id,
+        ...errorFields(err),
+        duration_ms: elapsedMs(startedAt),
+      });
       throw err;
     }
   }

@@ -4,6 +4,7 @@ import type { Transcript, TranscriptSegment } from "./asr";
 import type { Db } from "./db";
 import { bind, rows as many } from "./sql";
 import type { LLMProvider } from "./generations";
+import { elapsedMs, errorFields, logError, logInfo } from "./log";
 
 /** 回答中的时间引用（点击联动播放器） */
 export interface QaCitation {
@@ -228,6 +229,7 @@ export class QaService {
     const question = input.question.trim();
     if (!question) throw new Error("问题不能为空");
 
+    const startedAt = Date.now();
     this.opts.store.add({ taskId: input.taskId, role: "user", content: question });
 
     // 取材策略：短稿全给；长稿先检索，检索空手则全片抽样（跨语言提问的兜底）
@@ -240,34 +242,52 @@ export class QaService {
         ? hits
         : sampleAcross(all);
     const sampled = !full && hits.length === 0 && candidates.length > 0;
+    logInfo("qa retrieval ready", {
+      task_id: input.taskId,
+      mode: full ? "full" : hits.length > 0 ? "retrieval" : "sample",
+      total_segments: all.length,
+      candidates: candidates.length,
+      question_chars: question.length,
+    });
     const context = candidates
       .map((c) => `[t${String(c.index + 1).padStart(2, "0")}] ${formatTime(c.segment.start)}-${formatTime(c.segment.end)} ${c.segment.text}`)
       .join("\n");
 
-    const raw = await this.opts.llm.generate(
-      [
-        { role: "system", content: QA_SYSTEM },
-        {
-          role: "user",
-          content: [
-            `问题：${question}`,
-            "",
-            candidates.length === 0
-              ? "（转写稿为空，只能说明无法回答）"
-              : sampled
-                ? "（未检索到直接相关段落，以下是全片均匀抽样，请据此判断能否回答）"
-                : full
-                  ? "完整转写稿："
-                  : "相关转写段落：",
-            context,
-            "",
-            "只输出 JSON：",
-            '{"answer":"回答正文，含 [[tNN]] 引用","limitations":["未确认之处"]}',
-          ].join("\n"),
-        },
-      ],
-      (delta) => input.onDelta?.(delta),
-    );
+    let raw: string;
+    try {
+      raw = await this.opts.llm.generate(
+        [
+          { role: "system", content: QA_SYSTEM },
+          {
+            role: "user",
+            content: [
+              `问题：${question}`,
+              "",
+              candidates.length === 0
+                ? "（转写稿为空，只能说明无法回答）"
+                : sampled
+                  ? "（未检索到直接相关段落，以下是全片均匀抽样，请据此判断能否回答）"
+                  : full
+                    ? "完整转写稿："
+                    : "相关转写段落：",
+              context,
+              "",
+              "只输出 JSON：",
+              '{"answer":"回答正文，含 [[tNN]] 引用","limitations":["未确认之处"]}',
+            ].join("\n"),
+          },
+        ],
+        (delta) => input.onDelta?.(delta),
+        { operation: "qa.answer", taskId: input.taskId },
+      );
+    } catch (err) {
+      logError("qa answer failed", {
+        task_id: input.taskId,
+        ...errorFields(err),
+        duration_ms: elapsedMs(startedAt),
+      });
+      throw err;
+    }
 
     const parsed = parseAnswer(raw);
     // 引用格式先规范化（模型常少写方括号），再校验编号范围
@@ -306,6 +326,15 @@ export class QaService {
       content: text,
       citations: valid,
       limitations,
+    });
+    logInfo("qa answer completed", {
+      task_id: input.taskId,
+      message_id: message.id,
+      citations: valid.length,
+      invalid_citations: invalidTokens.length,
+      limitations: limitations.length,
+      chars: text.length,
+      duration_ms: elapsedMs(startedAt),
     });
     return { message, answer: { text, citations: valid, limitations } };
   }

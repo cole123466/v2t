@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { taskDir } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
 import { isSupportedLink } from "@/server/source";
+import { errorFields, logInfo, logWarn } from "@/server/log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,6 +28,10 @@ export async function POST(req: Request) {
   try {
     meta = await source.probe(url);
   } catch (err) {
+    logWarn("link probe failed", {
+      host: new URL(url).host,
+      ...errorFields(err),
+    });
     return Response.json(
       { error: err instanceof Error ? err.message : String(err) },
       { status: 502 },
@@ -54,6 +59,12 @@ export async function POST(req: Request) {
     return Response.json({ error: "无法创建任务目录" }, { status: 500 });
   }
 
+  logInfo("link task accepted", {
+    task_id: task.id,
+    host: new URL(url).host,
+    title_chars: meta.title.length,
+    duration_sec: meta.durationSec,
+  });
   runner.enqueue(task.id);
   return Response.json(store.get(task.id) ?? task, { status: 201 });
 }
