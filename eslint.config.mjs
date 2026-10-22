@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // 本地索引 / 运行数据 / 日志不参与代码规范检查
+    ".projetcIndex/**",
+    "data/**",
+    "coverage/**",
+    "app.log",
   ]),
 ]);
 
