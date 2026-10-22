@@ -1,138 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState, type RefObject } from "react";
-import Image from "next/image";
 import { Archive, ChevronRight, Download, FileText, Loader, RotateCcw, X } from "lucide-react";
 import type { MindMapNode } from "@/server/article";
 import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
-import { clock } from "@/lib/time";
+import { ArticleBlockView } from "./article-block";
 
 const DETAIL_OPTIONS: Array<{ value: ArticleDetailLevel; label: string; hint: string }> = [
   { value: "concise", label: "速览", hint: "800 字内，只留核心" },
   { value: "standard", label: "标准", hint: "信息完整而克制" },
   { value: "detailed", label: "深入", hint: "展开推导与细节" },
 ];
-
-/** 把正文里的 [[tNN]] 渲染成可点击的时间芯片；[[fNN]] 由下方的真实画面承载 */
-function CitationText({
-  text,
-  onSeek,
-  times,
-}: {
-  text: string;
-  onSeek: (t: number) => void;
-  /** 引用编号 → 视频内时间；缺失表示无出处 */
-  times: Map<string, number>;
-}) {
-  const parts = useMemo(() => text.split(/(\[\[[tf]\d{2,}\]\])/g), [text]);
-  return (
-    <>
-      {parts.map((part, i) => {
-        const match = /^\[\[([tf])(\d{2,})\]\]$/.exec(part);
-        if (!match) return <span key={i}>{part}</span>;
-        const id = `${match[1]}${match[2]}`;
-        const t = times.get(id);
-        // 画面引用不占正文，交给段落下方的图注渲染
-        if (match[1] === "f") return null;
-        if (t === undefined) {
-          return (
-            <span
-              key={i}
-              className="mx-0.5 inline-flex items-center rounded-md border border-danger/30 px-1.5 py-0.5 align-baseline font-mono text-[10px] text-danger/70"
-              title={`出处 ${id} 无法核实`}
-            >
-              {id}
-            </span>
-          );
-        }
-        return (
-          <button
-            key={i}
-            type="button"
-            onClick={() => onSeek(t)}
-            className="mx-0.5 inline-flex items-center rounded-md border border-gold/30 bg-gold/10 px-1.5 py-0.5 align-baseline font-mono text-[10px] text-gold transition-colors hover:bg-gold/20"
-            title={`${match[1] === "t" ? "转写段" : "画面"} ${id} · ${clock(t)}`}
-          >
-            {id}
-          </button>
-        );
-      })}
-    </>
-  );
-}
-
-/** 单张画面：点击回到视频对应时间；帧被清理或缺失时静默不渲染 */
-function ArticleFrame({
-  taskId,
-  frameId,
-  tSec,
-  onSeek,
-}: {
-  taskId: string;
-  frameId: string;
-  tSec: number;
-  onSeek: (t: number) => void;
-}) {
-  const [failed, setFailed] = useState(false);
-  if (failed) return null;
-  return (
-    <figure className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
-      <button
-        type="button"
-        onClick={() => onSeek(tSec)}
-        title={`回到 ${clock(tSec)}`}
-        className="block w-full"
-      >
-        <Image
-          src={`/api/tasks/${taskId}/frames/${frameId}`}
-          alt={`画面 ${frameId}`}
-          width={1280}
-          height={720}
-          unoptimized
-          loading="lazy"
-          className="aspect-video w-full object-cover"
-          onError={() => setFailed(true)}
-        />
-      </button>
-      <figcaption className="flex items-center justify-between px-3 py-1.5 font-mono text-[10px] tracking-wider text-paper-faint">
-        <span>{frameId.toUpperCase()}</span>
-        <span>{clock(tSec)}</span>
-      </figcaption>
-    </figure>
-  );
-}
-
-/** 段落中引用到的画面，按出现顺序渲染为真实图片 */
-function FrameStrip({
-  text,
-  taskId,
-  times,
-  onSeek,
-}: {
-  text: string;
-  taskId: string;
-  times: Map<string, number>;
-  onSeek: (t: number) => void;
-}) {
-  const frames = useMemo(() => {
-    const ids = Array.from(text.matchAll(/\[\[(f\d{2,})\]\]/g), (m) => m[1]);
-    return Array.from(new Set(ids)).filter((id) => times.has(id));
-  }, [text, times]);
-  if (frames.length === 0) return null;
-  return (
-    <div className={`mt-3 grid gap-2 ${frames.length > 1 ? "sm:grid-cols-2" : ""}`}>
-      {frames.map((id) => (
-        <ArticleFrame
-          key={id}
-          taskId={taskId}
-          frameId={id}
-          tSec={times.get(id) as number}
-          onSeek={onSeek}
-        />
-      ))}
-    </div>
-  );
-}
 
 function MindMapTree({
   nodes,
@@ -449,17 +327,13 @@ export function ArticlePanel({
                 <h3 className="font-display text-lg font-semibold text-paper">{section.title}</h3>
                 <div className="mt-2 space-y-3">
                   {section.blocks.map((block, i) => (
-                    <div key={i}>
-                      <p className="text-sm leading-relaxed text-paper-dim">
-                        <CitationText text={block.text} onSeek={seek} times={citationTimes} />
-                      </p>
-                      <FrameStrip
-                        text={block.text}
-                        taskId={taskId}
-                        times={citationTimes}
-                        onSeek={seek}
-                      />
-                    </div>
+                    <ArticleBlockView
+                      key={i}
+                      taskId={taskId}
+                      block={block}
+                      times={citationTimes}
+                      onSeek={seek}
+                    />
                   ))}
                 </div>
               </section>

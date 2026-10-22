@@ -5,11 +5,14 @@ import { bind, row as one, rows as many } from "./sql";
 import type { LLMMessage, LLMProvider } from "./generations";
 import {
   looseJsonBody,
-  normalizeCitations,
+  normalizeArticle,
+  validateBlocks,
+  validateCitations,
+  validateStructure,
   type Article,
   type ArticleDraftOutline,
-  type CitationCatalog,
   type ArticleSection,
+  type CitationCatalog,
 } from "./article";
 
 export type ArticleDetailLevel = "concise" | "standard" | "detailed";
@@ -50,7 +53,7 @@ function toRecord(row: ArticleRow): ArticleRecord {
     taskId: row.task_id,
     status: row.status as ArticleRecord["status"],
     title: row.title,
-    content: row.content ? (JSON.parse(row.content) as Article) : null,
+    content: row.content ? normalizeArticle(JSON.parse(row.content)) : null,
     outline: row.outline ? (JSON.parse(row.outline) as ArticleDraftOutline) : null,
     detailLevel: row.detail_level as ArticleDetailLevel,
     purpose: row.purpose,
@@ -117,7 +120,7 @@ export class ArticleStore {
     }
     if ("content" in patch) {
       sets.push("content = @content");
-      params.content = patch.content ? JSON.stringify(patch.content) : null;
+      params.content = patch.content ? JSON.stringify(normalizeArticle(patch.content)) : null;
     }
     if ("outline" in patch) {
       sets.push("outline = @outline");
@@ -156,6 +159,18 @@ const DETAIL_GUIDE: Record<ArticleDetailLevel, string> = {
   detailed: "深入：每章 3-6 段，展开推导、条件、易忽略的细节与对比，允许更长篇幅。",
 };
 
+const BLOCK_SPEC = [
+  "正文块只允许以下六种（每章非段落块合计 ≤3，首块必须是 paragraph）：",
+  '- paragraph：{"type":"paragraph","text":"正文"}，每段 ≤800 字',
+  '- quote：{"type":"quote","text":"原文引用"}，仅用于转写稿里的原话',
+  '- list：{"type":"list","ordered":false,"items":["要点一","要点二"]}，2-6 项',
+  '- code：{"type":"code","lang":"bash","text":"命令或代码"}，≤40 行',
+  '- table：{"type":"table","header":["列一","列二"],"rows":[["甲","乙"]]}，2-4 列、≤8 行',
+  '- figure：{"type":"figure","frameId":"f01","caption":"画面说明"}，同一帧全篇只用一次',
+  "行内可用 **粗体**、*斜体*、`代码`、[文案](https://example.com) 与 [[tNN]] 时间引用；",
+  "画面一律用 figure 块，不要在段落里写 [[fNN]]；不要输出 HTML 或 Markdown 图片。",
+].join("\n");
+
 const SYSTEM_PROMPT =
   "你是资深中文编辑，负责把视频内容整理成可独立阅读的图文文章。" +
   "只依据提供的转写文本与画面写作用，不编造视频里没有的事实；不确定的地方写进 limitations。" +
@@ -190,6 +205,8 @@ function outlinePrompt(catalog: CitationCatalog, detail: ArticleDetailLevel, pur
     "画面目录：",
     frameCatalogText(catalog),
     "",
+    BLOCK_SPEC,
+    "",
     "只输出 JSON，结构如下：",
     '{"title":"文章标题","sections":[{"id":"s1","title":"章节标题","summary":"本章要点"}],"mindMap":[{"label":"主题","children":[{"label":"子题","sectionId":"s1"}]}]}',
   ]
@@ -220,8 +237,9 @@ function sectionPrompt(
       ? frameImages.map((f) => `[${f.id}]`).join(" ")
       : frameCatalogText(catalog),
     "",
+    BLOCK_SPEC,
     "只输出 JSON：",
-    '{"id":"本章 id","title":"章节标题","blocks":[{"text":"段落正文，含 [[tNN]] / [[fNN]] 引用"}]}',
+    '{"id":"本章 id","title":"章节标题","blocks":[{"type":"paragraph","text":"段落正文，含 [[tNN]] 引用"},{"type":"figure","frameId":"f01","caption":"画面说明"}]}',
   ]
     .filter(Boolean)
     .join("\n");
@@ -298,11 +316,21 @@ export class ArticleService {
         interface SectionPayload {
           id?: string;
           title?: string;
-          blocks?: Array<{ text?: string }>;
+          blocks?: unknown[];
         }
         let parsed: SectionPayload | null = null;
+        let parsedBlocks: ArticleSection["blocks"] | null = null;
         let lastError: Error | null = null;
-        for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+        let blockProblems: string[] = [];
+        for (let attempt = 0; attempt < 2 && !parsedBlocks; attempt++) {
+          const retryNote =
+            attempt === 0
+              ? ""
+              : lastError
+                ? "上一次输出不是合法的 JSON。请只输出一个 JSON 对象，不要任何解释、不要 Markdown 围栏；" +
+                  "正文里不要出现英文双引号（改用中文引号「」），总长度控制在 1200 字以内。"
+                : `上一次输出的块字段不合规：${blockProblems.join("；")}。` +
+                  "请严格按上面的块类型与配额输出，只输出 JSON。";
           const messages: LLMMessage[] =
             attempt === 0
               ? [
@@ -312,40 +340,68 @@ export class ArticleService {
               : [
                   { role: "system", content: prompt.system },
                   { role: "user", content },
-                  {
-                    role: "user",
-                    content:
-                      "上一次输出不是合法的 JSON。请只输出一个 JSON 对象，不要任何解释、不要 Markdown 围栏；" +
-                      "正文里不要出现英文双引号（改用中文引号「」），总长度控制在 1200 字以内。",
-                  },
+                  { role: "user", content: retryNote },
                 ];
           const raw = await this.opts.llm.generate(messages, (delta) => input.onDelta?.(delta));
           try {
             parsed = JSON.parse(looseJsonBody(raw)) as SectionPayload;
+            const normalized = normalizeArticle({
+              title: outline.title,
+              sections: [
+                {
+                  id: section.id,
+                  title: parsed.title?.trim() || section.title,
+                  blocks: parsed.blocks ?? [],
+                },
+              ],
+              mindMap: [],
+              limitations: [],
+            });
+            const issues = validateBlocks(normalized, input.catalog);
+            if (issues.length > 0) {
+              blockProblems = issues.slice(0, 5).map((p) => p.message);
+              lastError = null;
+              parsed = null;
+              continue;
+            }
+            parsedBlocks = normalized.sections[0].blocks;
           } catch (err) {
             lastError = err instanceof Error ? err : new Error(String(err));
+            blockProblems = [];
+            parsed = null;
           }
         }
-        if (!parsed) {
+        if (!parsedBlocks || !parsed) {
           throw new Error(
-            `第 ${i + 1} 章《${section.title}》生成结果无法解析（${lastError?.message ?? "JSON 不合法"}），已重试一次仍失败，请重新生成`,
+            `第 ${i + 1} 章《${section.title}》生成结果不合规（${lastError?.message ?? (blockProblems.join("；") || "未知原因")}），已重试一次仍失败，请重新生成`,
           );
         }
         sections.push({
           id: section.id,
           title: parsed.title?.trim() || section.title,
-          blocks: (parsed.blocks ?? [])
-            .map((b) => ({ text: String(b.text ?? "").trim() }))
-            .filter((b) => b.text.length > 0),
+          blocks: parsedBlocks,
         });
       }
 
-      const article: Article = {
+      const article = normalizeArticle({
         title: outline.title,
-        sections: normalizeArticleCitations(sections),
+        sections,
         mindMap: outline.mindMap,
         limitations: [],
-      };
+      });
+      const problems = [
+        ...validateStructure(article),
+        ...validateBlocks(article, input.catalog),
+        ...validateCitations(article, input.catalog),
+      ];
+      if (problems.length > 0) {
+        throw new Error(
+          `文章校验未通过：${problems
+            .slice(0, 8)
+            .map((p) => p.message)
+            .join("；")}`,
+        );
+      }
       this.opts.store.update(record.id, { content: article, status: "done", title: article.title });
       return { ...record, outline, content: article, status: "done", title: article.title };
     } catch (err) {
@@ -399,15 +455,4 @@ export class ArticleService {
     }
     return images;
   }
-}
-
-/** 模型常把引用写成 [[t01] 或少括号：统一成 [[tNN]] 再交给校验 */
-function normalizeArticleCitations(sections: ArticleSection[]): ArticleSection[] {
-  return sections.map((section) => ({
-    ...section,
-    blocks: section.blocks.map((block) => ({
-      ...block,
-      text: normalizeCitations(block.text),
-    })),
-  }));
 }

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { buildCatalog, validateCitations, validateStructure, type Article } from "@/server/article";
+import { buildCatalog, validateBlocks, validateCitations, validateStructure, type Article } from "@/server/article";
 import type { Transcript } from "@/server/asr";
 import { readFrameManifest } from "@/server/frames";
 import { taskDir, transcriptPath } from "@/server/paths";
@@ -81,7 +81,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
         // 发布前校验：结构 + 引用白名单（不通过则不标记为可用文章）
         const content = record.content as Article;
-        const problems = [...validateStructure(content), ...validateCitations(content, catalog)];
+        const problems = [
+          ...validateStructure(content),
+          ...validateBlocks(content, catalog),
+          ...validateCitations(content, catalog),
+        ];
         if (problems.length > 0) {
           rt.articles.update(record.id, {
             status: "failed",

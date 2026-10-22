@@ -6,8 +6,10 @@ import {
   buildCatalog,
   extractCitations,
   looseJsonBody,
+  normalizeArticle,
   normalizeCitations,
   parseArticleJson,
+  validateBlocks,
   validateCitations,
   validateStructure,
   type Article,
@@ -54,7 +56,7 @@ function makeArticle(overrides: Partial<Article> = {}): Article {
       {
         id: "s1",
         title: "第一章",
-        blocks: [{ text: "开场提到 [[t01]]，画面见 [[f00]]。" }],
+        blocks: [{ type: "paragraph", text: "开场提到 [[t01]]，画面见 [[f00]]。" }],
       },
     ],
     mindMap: [{ label: "主题", children: [{ label: "第一章", sectionId: "s1" }] }],
@@ -72,7 +74,7 @@ describe("引用校验（纯函数）", () => {
 
   it("不存在的编号被拒绝", () => {
     const problems = validateCitations(
-      makeArticle({ sections: [{ id: "s1", title: "x", blocks: [{ text: "见 [[t99]] 与 [[f42]]" }] }] }),
+      makeArticle({ sections: [{ id: "s1", title: "x", blocks: [{ type: "paragraph", text: "见 [[t99]] 与 [[f42]]" }] }] }),
       catalog,
     );
     expect(problems.map((p) => p.message).join()).toMatch(/t99.*不存在/);
@@ -85,7 +87,7 @@ describe("引用校验（纯函数）", () => {
     expect(withTime.some((p) => p.message.includes("没有句级时间戳"))).toBe(true);
 
     const frameOnly = validateCitations(
-      makeArticle({ sections: [{ id: "s1", title: "x", blocks: [{ text: "画面 [[f00]]" }] }] }),
+      makeArticle({ sections: [{ id: "s1", title: "x", blocks: [{ type: "paragraph", text: "画面 [[f00]]" }] }] }),
       noTs,
     );
     expect(frameOnly).toEqual([]);
@@ -94,7 +96,7 @@ describe("引用校验（纯函数）", () => {
   it("格式错误的引用被拒绝", () => {
     const problems = validateCitations(
       makeArticle({
-        sections: [{ id: "s1", title: "x", blocks: [{ text: "错误引用 [[t1]] 与 [[fx]]" }] }],
+        sections: [{ id: "s1", title: "x", blocks: [{ type: "paragraph", text: "错误引用 [[t1]] 与 [[fx]]" }] }],
       }),
       catalog,
     );
@@ -113,7 +115,7 @@ describe("结构校验（纯函数）", () => {
       title: "x",
       sections: [
         { id: "s1", title: "a", blocks: [] },
-        { id: "s1", title: "b", blocks: [{ text: "x" }] },
+        { id: "s1", title: "b", blocks: [{ type: "paragraph", text: "x" }] },
       ],
       mindMap: [{ label: "主题", children: [{ label: "指向不存在", sectionId: "s9" }] }],
       limitations: [],
@@ -208,16 +210,150 @@ describe("引用标记规范化（真实故障）", () => {
   it("规范化后再校验：缺括号的引用能通过", () => {
     const catalog = buildCatalog(TRANSCRIPT, MANIFEST);
     const article = makeArticle({
-      sections: [{ id: "s1", title: "x", blocks: [{ text: "见 [[t01] 和 [[f00]" }] }],
+      sections: [{ id: "s1", title: "x", blocks: [{ type: "paragraph", text: "见 [[t01] 和 [[f00]" }] }],
     });
-    const fixed = {
-      ...article,
-      sections: article.sections.map((s) => ({
-        ...s,
-        blocks: s.blocks.map((b) => ({ text: normalizeCitations(b.text) })),
-      })),
-    };
+    const fixed = normalizeArticle(article);
     expect(validateCitations(fixed, catalog)).toEqual([]);
+  });
+});
+
+
+describe("结构化块兼容层", () => {
+  const legacy = {
+    title: "旧文章",
+    sections: [
+      {
+        id: "s1",
+        title: "第一章",
+        blocks: [{ text: "开头 [[t01]]，画面 [[f00]] 与 [[f01]]，再来 [[f00]]。" }],
+      },
+    ],
+    mindMap: [],
+    limitations: [{ text: "这里不确定 [[t02]]" }],
+  };
+
+  it("旧 {text} 迁移为 paragraph，并把 [[fNN]] 抽成 figure 且全篇去重", () => {
+    const article = normalizeArticle(legacy);
+    expect(article.schemaVersion).toBe(2);
+    expect(article.sections[0].blocks).toEqual([
+      { type: "paragraph", text: "开头 [[t01]]，画面 与 ，再来 。" },
+      { type: "figure", frameId: "f00" },
+      { type: "figure", frameId: "f01" },
+    ]);
+  });
+
+  it("归一化幂等", () => {
+    const once = normalizeArticle(legacy);
+    expect(normalizeArticle(once)).toEqual(once);
+  });
+
+  it("未知 type 有 text 降级为 paragraph，无 text 丢弃", () => {
+    const article = normalizeArticle({
+      title: "t",
+      sections: [
+        {
+          id: "s1",
+          title: "章",
+          blocks: [
+            { type: "weird", text: "降级内容" },
+            { type: "note", foo: 1 },
+            { text: "旧格式" },
+          ],
+        },
+      ],
+      mindMap: [],
+      limitations: [],
+    });
+    expect(article.sections[0].blocks).toEqual([
+      { type: "paragraph", text: "降级内容" },
+      { type: "paragraph", text: "旧格式" },
+    ]);
+  });
+
+  it("空章节补占位段落", () => {
+    const article = normalizeArticle({ title: "t", sections: [{ id: "s1", title: "空", blocks: [] }] });
+    expect(article.sections[0].blocks).toHaveLength(1);
+    expect(article.sections[0].blocks[0]).toMatchObject({ type: "paragraph" });
+  });
+
+  it("结构化块原样保留，图注与表格字段不丢失", () => {
+    const article = normalizeArticle({
+      title: "t",
+      sections: [
+        {
+          id: "s1",
+          title: "章",
+          blocks: [
+            { type: "quote", text: "引用 [[t01]]" },
+            { type: "list", ordered: true, items: ["甲 [[t02]]", "乙"] },
+            { type: "code", lang: "bash", text: "echo hi" },
+            { type: "table", header: ["列一", "列二"], rows: [["甲", "乙"]], caption: "表注" },
+            { type: "figure", frameId: "f00", caption: "画面说明" },
+          ],
+        },
+      ],
+      mindMap: [],
+      limitations: [],
+    });
+    expect(article.sections[0].blocks.map((b) => b.type)).toEqual([
+      "quote",
+      "list",
+      "code",
+      "table",
+      "figure",
+    ]);
+  });
+});
+
+describe("块级校验", () => {
+  const catalog = buildCatalog(TRANSCRIPT, MANIFEST);
+
+  function sectionWith(blocks: Article["sections"][number]["blocks"]): Article {
+    return { title: "t", sections: [{ id: "s1", title: "章", blocks }], mindMap: [], limitations: [] };
+  }
+
+  it("代码块不参与引用扫描", () => {
+    const article = sectionWith([{ type: "code", text: "echo [[t99]]" }]);
+    expect(validateCitations(article, catalog)).toEqual([]);
+  });
+
+  it("表格列数与行数超限被拒绝", () => {
+    const article = sectionWith([
+      {
+        type: "table",
+        header: ["一", "二", "三", "四", "五"],
+        rows: [["1", "2"]],
+      },
+    ]);
+    const messages = validateBlocks(article, catalog).map((p) => p.message).join(" | ");
+    expect(messages).toMatch(/2-4 列/);
+    expect(messages).toMatch(/不一致/);
+  });
+
+  it("同章重复帧与不存在的帧被拒绝", () => {
+    const article = sectionWith([
+      { type: "figure", frameId: "f00" },
+      { type: "figure", frameId: "f00" },
+      { type: "figure", frameId: "f42" },
+    ]);
+    const messages = validateBlocks(article, catalog).map((p) => p.message).join(" | ");
+    expect(messages).toMatch(/重复引用/);
+    expect(messages).toMatch(/f42 不存在/);
+  });
+
+  it("列表项数、段落字数与非段落块配额", () => {
+    const article = sectionWith([
+      { type: "paragraph", text: "长".repeat(801) },
+      { type: "list", items: ["只有一项"] },
+      { type: "quote", text: "A" },
+      { type: "quote", text: "B" },
+      { type: "code", text: "x" },
+      { type: "figure", frameId: "f00" },
+    ]);
+    const messages = validateBlocks(article, catalog).map((p) => p.message).join(" | ");
+    expect(messages).toMatch(/800/);
+    expect(messages).toMatch(/2-6 项/);
+    expect(messages).toMatch(/非段落块每章最多 3 个/);
   });
 });
 
@@ -282,6 +418,104 @@ describe("两步生成（提纲 → 逐章）", () => {
     const outlinePromptText = String(llm.calls[0][1].content);
     expect(outlinePromptText).toContain("[t01]");
     expect(outlinePromptText).toContain("0:00-0:10");
+  });
+
+  it("六类结构化块可解析落库，提示词声明块类型", async () => {
+    const store = new ArticleStore(db);
+    const calls: LLMMessage[][] = [];
+    const sections = [
+      {
+        id: "s1",
+        title: "第一章",
+        blocks: [
+          { type: "paragraph", text: "正文 [[t01]]" },
+          { type: "quote", text: "原话 [[t02]]" },
+          { type: "list", ordered: false, items: ["甲 [[t01]]", "乙"] },
+        ],
+      },
+      {
+        id: "s2",
+        title: "第二章",
+        blocks: [
+          { type: "paragraph", text: "承接上文。" },
+          { type: "code", lang: "bash", text: "echo [[t99]]" },
+          { type: "table", header: ["列一", "列二"], rows: [["甲", "乙"]] },
+          { type: "figure", frameId: "f00", caption: "真实画面" },
+        ],
+      },
+    ];
+    const llm: LLMProvider = {
+      async generate(messages, onChunk) {
+        calls.push(messages);
+        if (calls.length === 1) {
+          onChunk("提纲");
+          return JSON.stringify({
+            title: "结构化文章",
+            sections: [
+              { id: "s1", title: "第一章", summary: "要点一" },
+              { id: "s2", title: "第二章", summary: "要点二" },
+            ],
+            mindMap: [{ label: "主题" }],
+          });
+        }
+        onChunk("章节");
+        return JSON.stringify(sections[calls.length - 2] ?? sections[0]);
+      },
+    };
+    const svc = new ArticleService({ store, llm });
+    const record = await svc.generate({
+      taskId: "task-article-structured",
+      catalog: buildCatalog(TRANSCRIPT, MANIFEST),
+      frameFiles: new Map(),
+    });
+
+    const types = record.content?.sections.flatMap((s) => s.blocks.map((b) => b.type)) ?? [];
+    expect(new Set(types)).toEqual(
+      new Set(["paragraph", "quote", "list", "code", "table", "figure"]),
+    );
+    const outlinePromptText = String(calls[0][1].content);
+    expect(outlinePromptText).toContain("只允许以下六种");
+    expect(outlinePromptText).toContain("figure");
+  });
+
+  it("块字段不合规时重试，并在第二次提示中说明原因", async () => {
+    const store = new ArticleStore(db);
+    const calls: LLMMessage[][] = [];
+    const llm: LLMProvider = {
+      async generate(messages) {
+        calls.push(messages);
+        if (calls.length === 1) {
+          return JSON.stringify({
+            title: "重试文章",
+            sections: [{ id: "s1", title: "第一章", summary: "要点" }],
+            mindMap: [],
+          });
+        }
+        if (calls.length === 2) {
+          return JSON.stringify({
+            id: "s1",
+            title: "第一章",
+            blocks: [{ type: "table", header: ["一", "二", "三", "四", "五"], rows: [] }],
+          });
+        }
+        return JSON.stringify({
+          id: "s1",
+          title: "第一章",
+          blocks: [{ type: "paragraph", text: "修正后的正文 [[t01]]" }],
+        });
+      },
+    };
+    const svc = new ArticleService({ store, llm });
+    const record = await svc.generate({
+      taskId: "task-article-retry",
+      catalog: buildCatalog(TRANSCRIPT, MANIFEST),
+      frameFiles: new Map(),
+    });
+
+    expect(record.status).toBe("done");
+    expect(calls).toHaveLength(3);
+    const retryPrompt = String(calls[2][2]?.content);
+    expect(retryPrompt).toContain("块字段不合规");
   });
 
   it("深度与关注点进入 prompt", async () => {

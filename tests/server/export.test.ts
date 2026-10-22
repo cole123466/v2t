@@ -9,7 +9,7 @@ const article: Article = {
     {
       id: "s1",
       title: "第一章",
-      blocks: [{ text: "第一句 [[t01]]，画面 [[f00]] 与 [[f01]]，重复引用 [[f00]]。" }],
+      blocks: [{ type: "paragraph", text: "第一句 [[t01]]，画面 [[f00]] 与 [[f01]]，重复引用 [[f00]]。" }],
     },
   ],
   mindMap: [{ label: "根", children: [{ label: "子", sectionId: "s1" }] }],
@@ -66,6 +66,71 @@ describe("Markdown 导出", () => {
     expect(md).toContain("## 还没确认的部分");
     expect(md).toContain("## 来源");
     expect(md).toContain("[^source-1]: [转写 · 00:02](<https://example.com/v?x=1&t=2>)（至 00:07）");
+  });
+});
+
+
+describe("结构化块 Markdown 导出", () => {
+  const structured: Article = {
+    title: "结构化文章",
+    sections: [
+      {
+        id: "s1",
+        title: "第一章",
+        blocks: [
+          { type: "paragraph", text: "**粗体** 与 [链接](https://example.com/a)" },
+          { type: "quote", text: "原话 [[t01]]" },
+          { type: "list", ordered: true, items: ["第一 [[t01]]", "第二"] },
+          { type: "code", lang: "ts", text: 'const a = 1;\nconst b = "[[f02]]";' },
+          {
+            type: "table",
+            header: ["列一", "列二"],
+            rows: [["甲 [[t01]]", "乙 | 丙"]],
+            caption: "表注",
+          },
+          { type: "figure", frameId: "f00", caption: "画面说明" },
+        ],
+      },
+    ],
+    mindMap: [],
+    limitations: [],
+  };
+
+  const md = renderArticleMarkdown({
+    article: structured,
+    detailLevel: "标准",
+    purpose: null,
+    model: "glm-4.6",
+    sourceUrl: null,
+    citations,
+    images: new Map([["f00", "images/frame-001.jpg"]]),
+  });
+
+  it("段落行内粗体与链接", () => {
+    expect(md).toContain("**粗体** 与 [链接](<https://example.com/a>)");
+  });
+
+  it("引用块、有序列表与时间脚注", () => {
+    expect(md).toContain("> 原话 [^source-1]");
+    expect(md).toContain("1. 第一 [^source-1]");
+    expect(md).toContain("2. 第二");
+  });
+
+  it("代码块按语言加围栏，内容原样保留", () => {
+    expect(md).toContain('```ts\nconst a = 1;\nconst b = "[[f02]]";\n```');
+  });
+
+  it("表格转义管道符并渲染图注", () => {
+    expect(md).toContain("| 列一 | 列二 |");
+    expect(md).toContain("| --- | --- |");
+    expect(md).toContain("| 甲 [^source-1] | 乙 \\| 丙 |");
+    expect(md).toContain("*表注*");
+  });
+
+  it("figure 块渲染图片与图注，代码里的帧引用不收集", () => {
+    expect(md).toContain("![画面说明](images/frame-001.jpg)");
+    expect(md).toContain("*图：画面说明*[^source-2]");
+    expect(collectFrameIds(structured)).toEqual(["f00"]);
   });
 });
 

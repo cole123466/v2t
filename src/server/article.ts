@@ -2,13 +2,25 @@ import type { FrameManifest } from "./frames";
 import type { Transcript } from "./asr";
 
 /**
- * 文章结构：章节 → 段落块。每个块可引用时间（tN）与帧（fN），
- * 引用 token 以 [[t01]] / [[f03]] 内联在文本中，服务端校验后才会发布。
+ * 文章结构：章节 → 内容块。正文里的引用 token 以 [[t01]] / [[f03]] 内联在文本中；
+ * 段落中出现的 [[fNN]] 会在归一化时抽出为紧随其后的 figure 块。
  */
-export interface ArticleBlock {
-  /** 段落正文，可含 [[tNN]] / [[fNN]] 引用 token */
-  text: string;
-}
+export type InlineMark = "bold" | "emphasis" | "code";
+
+export type Inline =
+  | { kind: "text"; text: string; marks: InlineMark[] }
+  | { kind: "cite"; id: string }
+  | { kind: "link"; href: string; text: string; marks: InlineMark[] };
+
+export type ArticleBlock =
+  | { type: "paragraph"; text: string }
+  | { type: "quote"; text: string }
+  | { type: "list"; ordered?: boolean; items: string[] }
+  | { type: "code"; text: string; lang?: string }
+  | { type: "table"; header: string[]; rows: string[][]; caption?: string }
+  | { type: "figure"; frameId: string; caption?: string };
+
+export const ARTICLE_BLOCK_TYPES = ["paragraph", "quote", "list", "code", "table", "figure"] as const;
 
 export interface ArticleSection {
   id: string;
@@ -28,6 +40,8 @@ export interface ArticleLimitation {
 }
 
 export interface Article {
+  /** 内容形态版本；2 = 结构化块。仅用于排障，读取时不强校验 */
+  schemaVersion?: number;
   title: string;
   sections: ArticleSection[];
   mindMap: MindMapNode[];
@@ -97,9 +111,266 @@ export interface CitationProblem {
   message: string;
 }
 
+/** 块内文本：用于引用扫描与导出；code 不参与引用扫描，单独跳过 */
+export function blockText(block: ArticleBlock): string {
+  switch (block.type) {
+    case "paragraph":
+    case "quote":
+      return block.text;
+    case "list":
+      return block.items.join("\n");
+    case "code":
+      return "";
+    case "table":
+      return [block.caption ?? "", ...block.header, ...block.rows.flat()]
+        .filter((part) => part.length > 0)
+        .join("\n");
+    case "figure":
+      return block.caption ?? "";
+  }
+}
+
+function addMark(marks: InlineMark[], mark: InlineMark): InlineMark[] {
+  return marks.includes(mark) ? marks : [...marks, mark];
+}
+
+function findEmphasisEnd(text: string, from: number): number {
+  for (let i = from; i < text.length; i++) {
+    if (text[i] === "*" && text[i - 1] !== "*" && text[i + 1] !== "*") return i;
+  }
+  return -1;
+}
+
+function parseMarks(text: string, marks: InlineMark[]): Inline[] {
+  const out: Inline[] = [];
+  let buffer = "";
+  const flush = () => {
+    if (!buffer) return;
+    out.push({ kind: "text", text: buffer, marks: [...marks] });
+    buffer = "";
+  };
+
+  for (let i = 0; i < text.length; ) {
+    if (text.startsWith("**", i)) {
+      const end = text.indexOf("**", i + 2);
+      if (end > i + 2) {
+        flush();
+        out.push(...parseMarks(text.slice(i + 2, end), addMark(marks, "bold")));
+        i = end + 2;
+        continue;
+      }
+    }
+    if (text[i] === "*") {
+      const end = findEmphasisEnd(text, i + 1);
+      if (end > i + 1) {
+        flush();
+        out.push(...parseMarks(text.slice(i + 1, end), addMark(marks, "emphasis")));
+        i = end + 1;
+        continue;
+      }
+    }
+    if (text[i] === "`") {
+      const end = text.indexOf("`", i + 1);
+      if (end > i + 1) {
+        flush();
+        out.push({ kind: "text", text: text.slice(i + 1, end), marks: addMark(marks, "code") });
+        i = end + 1;
+        continue;
+      }
+    }
+    if (text.startsWith("[[", i)) {
+      const cite = /^\[\[([tf]\d{2,})\]\]/.exec(text.slice(i));
+      if (cite) {
+        flush();
+        out.push({ kind: "cite", id: cite[1] });
+        i += cite[0].length;
+        continue;
+      }
+    }
+    if (text[i] === "[") {
+      const link = /^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/.exec(text.slice(i));
+      if (link) {
+        flush();
+        out.push({ kind: "link", href: link[2], text: link[1], marks: [...marks] });
+        i += link[0].length;
+        continue;
+      }
+    }
+    buffer += text[i];
+    i += 1;
+  }
+  flush();
+  return out;
+}
+
+/** 解析行内 Markdown 子集与引用 token，返回结构化 Inline（渲染与导出共用） */
+export function parseInline(text: string): Inline[] {
+  return parseMarks(text, []);
+}
+
+function asText(value: unknown): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(asText) : [];
+}
+
+/** 抽出正文里的 [[fNN]]，交给调用方生成 figure 块 */
+function extractFrameRefs(text: string): { text: string; frames: string[] } {
+  const frames: string[] = [];
+  const cleaned = text.replace(/\[\[(f\d{2,})\]\]/g, (_, id: string) => {
+    frames.push(id);
+    return "";
+  });
+  return { text: cleaned.replace(/[ \t]{2,}/g, " ").trim(), frames };
+}
+
+/**
+ * 兼容层：把任意历史/模型输出归一化为结构化文章。
+ * - 缺 type 的 `{text}` → paragraph；未知 type 有 text → paragraph，否则丢弃
+ * - 段落里的 [[fNN]] 抽出为紧随其后的 figure，全篇同帧只保留一次
+ * - 空章节补占位段落；引用标记统一为 [[tNN]]/[[fNN]]
+ * 幂等，不抛错。
+ */
+export function normalizeArticle(raw: unknown): Article {
+  const input = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const seenFrames = new Set<string>();
+  const rawSections = Array.isArray(input.sections) ? input.sections : [];
+
+  const sections = rawSections.map((rawSection, index): ArticleSection => {
+    const section = (rawSection && typeof rawSection === "object" ? rawSection : {}) as Record<string, unknown>;
+    const blocks: ArticleBlock[] = [];
+
+    const pushFigure = (frameId: string) => {
+      if (seenFrames.has(frameId)) return;
+      seenFrames.add(frameId);
+      blocks.push({ type: "figure", frameId });
+    };
+
+    const pushTextBlock = (type: "paragraph" | "quote", value: unknown) => {
+      const normalized = extractFrameRefs(normalizeCitations(asText(value)));
+      if (normalized.text) blocks.push({ type, text: normalized.text });
+      for (const frameId of normalized.frames) pushFigure(frameId);
+    };
+
+    const rawBlocks = Array.isArray(section.blocks) ? section.blocks : [];
+    for (const rawBlock of rawBlocks) {
+      if (!rawBlock || typeof rawBlock !== "object") continue;
+      const block = rawBlock as Record<string, unknown>;
+      let type = asText(block.type);
+      if (!(ARTICLE_BLOCK_TYPES as readonly string[]).includes(type)) {
+        type = typeof block.text === "string" ? "paragraph" : "";
+      }
+
+      switch (type) {
+        case "paragraph":
+        case "quote":
+          pushTextBlock(type, block.text);
+          break;
+        case "list": {
+          const rawItems = Array.isArray(block.items) ? block.items : [];
+          const items: string[] = [];
+          const frames: string[] = [];
+          for (const rawItem of rawItems) {
+            const item =
+              rawItem && typeof rawItem === "object"
+                ? asText((rawItem as Record<string, unknown>).text)
+                : asText(rawItem);
+            const normalized = extractFrameRefs(normalizeCitations(item));
+            if (normalized.text) items.push(normalized.text);
+            frames.push(...normalized.frames);
+          }
+          if (items.length > 0) {
+            blocks.push(
+              typeof block.ordered === "boolean"
+                ? { type: "list", ordered: block.ordered, items }
+                : { type: "list", items },
+            );
+          }
+          for (const frameId of frames) pushFigure(frameId);
+          break;
+        }
+        case "code": {
+          const text = asText(block.text);
+          if (text.trim()) {
+            const lang = asText(block.lang).trim();
+            blocks.push(lang ? { type: "code", text, lang } : { type: "code", text });
+          }
+          break;
+        }
+        case "table": {
+          const header = asStringArray(block.header);
+          const rows = Array.isArray(block.rows)
+            ? block.rows.filter((row): row is unknown[] => Array.isArray(row)).map((row) => row.map(asText))
+            : [];
+          const normalizedCaption = extractFrameRefs(normalizeCitations(asText(block.caption)));
+          const caption = normalizedCaption.text;
+          if (header.length > 0) {
+            const frames: string[] = [...normalizedCaption.frames];
+            const cleanHeader = header.map((cell) => {
+              const normalized = extractFrameRefs(normalizeCitations(cell));
+              frames.push(...normalized.frames);
+              return normalized.text;
+            });
+            const cleanRows = rows.map((row) =>
+              row.map((cell) => {
+                const normalized = extractFrameRefs(normalizeCitations(cell));
+                frames.push(...normalized.frames);
+                return normalized.text;
+              }),
+            );
+            blocks.push(
+              caption
+                ? { type: "table", header: cleanHeader, rows: cleanRows, caption }
+                : { type: "table", header: cleanHeader, rows: cleanRows },
+            );
+            for (const frameId of frames) pushFigure(frameId);
+          }
+          break;
+        }
+        case "figure": {
+          const frameIds = Array.isArray(block.frame_ids) ? block.frame_ids : [];
+          const frameId = asText(block.frameId ?? block.frame_id ?? frameIds[0]);
+          if (!/^f\d{2,}$/.test(frameId) || seenFrames.has(frameId)) break;
+          const caption = normalizeCitations(asText(block.caption)).trim();
+          seenFrames.add(frameId);
+          blocks.push(caption ? { type: "figure", frameId, caption } : { type: "figure", frameId });
+          break;
+        }
+      }
+    }
+
+    if (blocks.length === 0) blocks.push({ type: "paragraph", text: "（本章暂无正文）" });
+    return {
+      id: asText(section.id) || `s${index + 1}`,
+      title: asText(section.title) || `第 ${index + 1} 章`,
+      blocks,
+    };
+  });
+
+  const limitations = Array.isArray(input.limitations)
+    ? input.limitations
+        .map((item) => {
+          if (typeof item === "string") return { text: normalizeCitations(item).trim() };
+          if (!item || typeof item !== "object") return { text: "" };
+          return { text: normalizeCitations(asText((item as Record<string, unknown>).text)).trim() };
+        })
+        .filter((item) => item.text.length > 0)
+    : [];
+
+  return {
+    schemaVersion: 2,
+    title: normalizeCitations(asText(input.title)).trim(),
+    sections,
+    mindMap: Array.isArray(input.mindMap) ? (input.mindMap as MindMapNode[]) : [],
+    limitations,
+  };
+}
+
 /**
  * 引用校验（纯函数）：编号在白名单内、帧存在、时间不越界、无时间戳禁用 t 引用。
- * 返回空数组即通过。
+ * code 块是原文/命令，不扫描引用。返回空数组即通过。
  */
 export function validateCitations(
   article: Article,
@@ -133,11 +404,28 @@ export function validateCitations(
 
   article.sections.forEach((section, si) => {
     section.blocks.forEach((block, bi) => {
-      check(block.text, `sections[${si}].blocks[${bi}]`);
+      if (block.type === "code") return;
+      check(blockText(block), `sections[${si}].blocks[${bi}]`);
     });
   });
   article.limitations.forEach((l, i) => check(l.text, `limitations[${i}]`));
   return problems;
+}
+
+function blockHasContent(block: ArticleBlock): boolean {
+  switch (block.type) {
+    case "paragraph":
+    case "quote":
+      return block.text.trim().length > 0;
+    case "list":
+      return block.items.some((item) => item.trim().length > 0);
+    case "code":
+      return block.text.trim().length > 0;
+    case "table":
+      return block.header.length > 0;
+    case "figure":
+      return block.frameId.trim().length > 0;
+  }
 }
 
 /** 结构校验：章节/块数量、导图深度与指向 */
@@ -161,7 +449,7 @@ export function validateStructure(article: Article): CitationProblem[] {
       problems.push({ field: `sections[${i}].blocks`, message: `块数超过上限 ${ARTICLE_MAX_BLOCKS}` });
     }
     s.blocks.forEach((b, bi) => {
-      if (!b.text?.trim()) problems.push({ field: `sections[${i}].blocks[${bi}]`, message: "空内容块" });
+      if (!blockHasContent(b)) problems.push({ field: `sections[${i}].blocks[${bi}]`, message: "空内容块" });
     });
   });
 
@@ -180,6 +468,77 @@ export function validateStructure(article: Article): CitationProblem[] {
     }
   };
   walk(article.mindMap, 0, "mindMap");
+  return problems;
+}
+
+/** 块级校验：每类块的字段、配额与 figure 唯一性/存在性 */
+export function validateBlocks(article: Article, catalog?: CitationCatalog): CitationProblem[] {
+  const problems: CitationProblem[] = [];
+  const catalogFrames = catalog ? new Set(catalog.frames.map((frame) => frame.id)) : null;
+  const seenFrames = new Set<string>();
+
+  article.sections.forEach((section, si) => {
+    let nonParagraph = 0;
+    if (section.blocks[0]?.type !== "paragraph") {
+      problems.push({ field: `sections[${si}].blocks[0]`, message: "首块必须是段落" });
+    }
+    section.blocks.forEach((block, bi) => {
+      const field = `sections[${si}].blocks[${bi}]`;
+      if (block.type !== "paragraph") nonParagraph += 1;
+      switch (block.type) {
+        case "paragraph":
+          if (block.text.length > 800) {
+            problems.push({ field, message: `段落超过 800 字（${block.text.length}）` });
+          }
+          break;
+        case "quote":
+          break;
+        case "list":
+          if (block.items.length < 2 || block.items.length > 6) {
+            problems.push({ field, message: `列表需 2-6 项（当前 ${block.items.length}）` });
+          }
+          break;
+        case "code":
+          if (block.text.split("\n").length > 40) {
+            problems.push({ field, message: "代码块超过 40 行" });
+          }
+          break;
+        case "table": {
+          if (block.header.length < 2 || block.header.length > 4) {
+            problems.push({ field, message: `表格需 2-4 列（当前 ${block.header.length}）` });
+          }
+          if (block.rows.length > 8) {
+            problems.push({ field, message: `表格超过 8 行（当前 ${block.rows.length}）` });
+          }
+          block.rows.forEach((row, ri) => {
+            if (row.length !== block.header.length) {
+              problems.push({
+                field: `${field}.rows[${ri}]`,
+                message: `表格行有 ${row.length} 列，与表头 ${block.header.length} 列不一致`,
+              });
+            }
+          });
+          break;
+        }
+        case "figure": {
+          if (!/^f\d{2,}$/.test(block.frameId)) {
+            problems.push({ field, message: `画面编号格式错误：${block.frameId}` });
+          } else if (seenFrames.has(block.frameId)) {
+            problems.push({ field, message: `画面 ${block.frameId} 重复引用` });
+          }
+          seenFrames.add(block.frameId);
+          if (catalogFrames && !catalogFrames.has(block.frameId)) {
+            problems.push({ field, message: `画面引用 ${block.frameId} 不存在` });
+          }
+          break;
+        }
+      }
+    });
+    if (nonParagraph > 3) {
+      problems.push({ field: `sections[${si}].blocks`, message: "非段落块每章最多 3 个" });
+    }
+  });
+
   return problems;
 }
 
