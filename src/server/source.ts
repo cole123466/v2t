@@ -13,6 +13,8 @@ export interface SourceMeta {
   title: string;
   durationSec: number | null;
   thumbnailUrl: string | null;
+  /** 来源降级说明（如 B 站风控），有值时前端需要提示 */
+  notice?: string;
 }
 
 export interface FetchedMedia {
@@ -20,6 +22,8 @@ export interface FetchedMedia {
   file: string;
   ext: string;
   sizeBytes: number;
+  /** 来源降级说明（如 B 站风控），有值时写入任务并提示用户 */
+  notice?: string;
 }
 
 export interface FetchProgress {
@@ -46,6 +50,10 @@ export function isSupportedLink(url: string): boolean {
 }
 
 const MISSING_YTDLP = "未找到 yt-dlp，请先运行 scripts/setup 脚本安装下载器";
+
+/** B 站风控后官方接口兜底：任务页会持久展示，避免用户误以为拿到原清晰度 */
+export const BILIBILI_FALLBACK_NOTICE =
+  "B 站触发了风控限制，已改用官方接口获取 720P 单文件；清晰度可能低于原片，平台字幕可能不可用。";
 
 const SIZE_UNIT: Record<string, number> = {
   KiB: 1024, MiB: 1024 ** 2, GiB: 1024 ** 3, TiB: 1024 ** 4,
@@ -91,7 +99,8 @@ export function createYtDlpProvider(): SourceProvider {
           // 机房 IP 常被 B 站风控拦住网页，此时改走官方内容接口
           logWarn("link probe fallback to bilibili api", { host: new URL(url).host });
           try {
-            return await probeBilibili(url);
+            const meta = await probeBilibili(url);
+            return { ...meta, notice: BILIBILI_FALLBACK_NOTICE };
           } catch (fallbackError) {
             throw new Error(`${message}（API 兜底失败：${(fallbackError as Error).message}）`);
           }
@@ -168,7 +177,7 @@ export function createYtDlpProvider(): SourceProvider {
             bytes: media.sizeBytes,
             fallback: true,
           });
-          return media;
+          return { ...media, notice: BILIBILI_FALLBACK_NOTICE };
         }
         throw err;
       }

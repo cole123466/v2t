@@ -27,6 +27,7 @@ import { ArticlePanel } from "@/components/workbench/article-panel";
 import { QaPanel } from "@/components/workbench/qa-panel";
 import { ProcessPanel } from "@/components/workbench/process-panel";
 import { WaveBars } from "@/components/landing/wave-bars";
+import { SourceNotice } from "@/components/workbench/source-notice";
 import { clock } from "@/lib/time";
 
 const STAGES = [
@@ -176,10 +177,13 @@ export default function TaskPage() {
     </header>
   );
 
+  const notice = <SourceNotice text={task.sourceNotice} />;
+
   if (task.status === "failed") {
     return (
       <main className="mx-auto w-full max-w-3xl px-6 pb-16">
         {header}
+        {notice}
         <section className="glass mt-6 flex flex-col gap-3 rounded-3xl border-danger/30 p-8">
           <X className="size-8 text-danger/90" strokeWidth={1.5} />
           <h2 className="text-lg text-paper">处理失败</h2>
@@ -197,6 +201,7 @@ export default function TaskPage() {
     return (
       <main className="mx-auto w-full max-w-3xl px-6 pb-16">
         {header}
+        {notice}
         <section className="glass mt-6 flex flex-col gap-8 rounded-3xl p-10">
           {/* 波形随进度点亮：管线进行中时波形即产品的视觉锚 */}
           <ProgressWave progress={task.progress} />
@@ -256,6 +261,7 @@ export default function TaskPage() {
   return (
     <main className="mx-auto w-full max-w-[1500px] px-6 pb-10">
       {header}
+      {notice}
       {playbackError ? (
         <p className="mb-4 rounded-xl border border-gold/30 bg-gold/10 px-4 py-2.5 text-xs text-gold">
           当前浏览器不支持该容器格式的直接播放，文稿联动与导出不受影响。

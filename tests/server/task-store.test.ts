@@ -28,6 +28,7 @@ describe("TaskStore（Seam A · 任务台账）", () => {
     expect(task.progress).toBe(0);
     expect(task.error).toBeNull();
     expect(task.durationSec).toBeNull();
+    expect(task.sourceNotice).toBeNull();
     expect(task.createdAt).toBeTruthy();
     expect(store.get(task.id)).toMatchObject({ id: task.id, originalName: "demo.mp4" });
   });
@@ -40,6 +41,13 @@ describe("TaskStore（Seam A · 任务台账）", () => {
     const failed = store.get(task.id) as Task;
     expect(failed.status).toBe("failed");
     expect(failed.error).toBe("ffmpeg 处理失败");
+  });
+
+  it("sourceNotice 可写入并读回，旧任务默认空", () => {
+    const task = store.create({ originalName: "b.mp4", ext: ".mp4", sizeBytes: 1 });
+    expect(store.get(task.id)?.sourceNotice).toBeNull();
+    store.update(task.id, { sourceNotice: "B 站触发风控，已使用 720P 兜底" });
+    expect(store.get(task.id)?.sourceNotice).toBe("B 站触发风控，已使用 720P 兜底");
   });
 
   it("list 按创建时间新到旧排序", () => {

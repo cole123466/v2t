@@ -79,6 +79,7 @@ const COLUMNS: Array<{ table: string; column: string; ddl: string }> = [
   { table: "tasks", column: "source_thumbnail", ddl: "TEXT" },
   { table: "tasks", column: "transcript_origin", ddl: "TEXT" },
   { table: "tasks", column: "download_pct", ddl: "INTEGER" },
+  { table: "tasks", column: "source_notice", ddl: "TEXT" },
 ];
 
 export function openDb(file: string): Db {

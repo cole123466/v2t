@@ -50,6 +50,7 @@ export async function POST(req: Request) {
     sourceUrl: url,
     sourceTitle: meta.title,
     sourceThumbnail: meta.thumbnailUrl,
+    sourceNotice: meta.notice ?? null,
   });
   if (meta.durationSec !== null) {
     store.update(task.id, { durationSec: meta.durationSec });

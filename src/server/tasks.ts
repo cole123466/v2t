@@ -36,6 +36,8 @@ export interface Task {
   transcriptOrigin: TranscriptOrigin | null;
   /** 链接任务的下载百分比，上传任务为空 */
   downloadPct: number | null;
+  /** 来源降级提示（如 B 站风控后改用官方接口），无则为空 */
+  sourceNotice: string | null;
 }
 
 export interface NewTask {
@@ -46,6 +48,7 @@ export interface NewTask {
   sourceUrl?: string | null;
   sourceTitle?: string | null;
   sourceThumbnail?: string | null;
+  sourceNotice?: string | null;
 }
 
 export type TaskPatch = Partial<
@@ -62,6 +65,7 @@ export type TaskPatch = Partial<
     | "sourceThumbnail"
     | "transcriptOrigin"
     | "downloadPct"
+    | "sourceNotice"
   >
 >;
 
@@ -82,6 +86,7 @@ interface TaskRow {
   source_thumbnail: string | null;
   transcript_origin: string | null;
   download_pct: number | null;
+  source_notice: string | null;
 }
 
 function toTask(row: TaskRow): Task {
@@ -102,6 +107,7 @@ function toTask(row: TaskRow): Task {
     sourceThumbnail: row.source_thumbnail,
     transcriptOrigin: (row.transcript_origin as TranscriptOrigin | null) ?? null,
     downloadPct: row.download_pct,
+    sourceNotice: row.source_notice,
   };
 }
 
@@ -126,15 +132,16 @@ export class TaskStore {
       sourceThumbnail: input.sourceThumbnail ?? null,
       transcriptOrigin: null,
       downloadPct: null,
+      sourceNotice: input.sourceNotice ?? null,
     };
     this.db
       .prepare(
         `INSERT INTO tasks (id, original_name, ext, size_bytes, duration_sec, status, progress, error,
                             created_at, media_purged_at, source_kind, source_url, source_title,
-                            source_thumbnail, transcript_origin, download_pct)
+                            source_thumbnail, transcript_origin, download_pct, source_notice)
          VALUES (@id, @originalName, @ext, @sizeBytes, @durationSec, @status, @progress, @error,
                  @createdAt, @mediaPurgedAt, @sourceKind, @sourceUrl, @sourceTitle,
-                 @sourceThumbnail, @transcriptOrigin, @downloadPct)`,
+                 @sourceThumbnail, @transcriptOrigin, @downloadPct, @sourceNotice)`,
       )
       .run(bind(task));
     return task;
@@ -170,6 +177,7 @@ export class TaskStore {
       sourceThumbnail: "source_thumbnail",
       transcriptOrigin: "transcript_origin",
       downloadPct: "download_pct",
+      sourceNotice: "source_notice",
     };
     const sets: string[] = [];
     const params: Record<string, string | number | null> = { id };

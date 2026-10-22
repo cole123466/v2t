@@ -121,6 +121,7 @@ export class TaskRunner {
           sizeBytes: media.sizeBytes,
           downloadPct: 100,
           progress: 20,
+          sourceNotice: media.notice ?? task.sourceNotice,
         });
         logInfo("media downloaded", {
           task_id: taskId,
