@@ -25,10 +25,37 @@ export interface RunnerOptions {
   chunkSeconds?: number;
   /** 全景帧张数，默认 12 */
   overviewFrames?: number;
+  /** 同时等待处理的任务上限（不含正在处理的那个），默认 3 */
+  queueLimit?: number;
 }
 
 const DEFAULT_CHUNK_SECONDS = 50 * 60;
 const DEFAULT_OVERVIEW_FRAMES = 12;
+
+/** 排队任务上限：串行管线同一时刻只处理 1 个，最多再排 3 个等待 */
+export const DEFAULT_QUEUE_LIMIT = 3;
+export const QUEUE_FULL_CODE = "QUEUE_FULL";
+
+export function queueFullMessage(limit: number): string {
+  return `队列已满：最多 ${limit} 个任务排队，请等待当前任务完成后再试`;
+}
+
+/** 排队已满时由 enqueue 抛出，路由层转成 429 + QUEUE_FULL */
+export class QueueFullError extends Error {
+  readonly code = QUEUE_FULL_CODE;
+
+  constructor(readonly limit: number = DEFAULT_QUEUE_LIMIT) {
+    super(queueFullMessage(limit));
+    this.name = "QueueFullError";
+  }
+}
+
+/** 队列快照：active 最多 1 个（串行），queued 按入队顺序 */
+export interface QueueSnapshot {
+  active: Task[];
+  queued: Task[];
+  queuedLimit: number;
+}
 
 /**
  * 进程内串行任务管线：enqueue 入队，drain 逐个处理。
@@ -38,11 +65,30 @@ const DEFAULT_OVERVIEW_FRAMES = 12;
  */
 export class TaskRunner {
   private readonly queue: string[] = [];
+  /** 正在 process 的任务 id，用于队列快照区分「处理中」与「排队中」 */
+  private activeId: string | null = null;
   private running = false;
   private readonly subs = new Map<string, Set<Listener>>();
   private readonly idleResolvers: Array<() => void> = [];
 
   constructor(private readonly opts: RunnerOptions) {}
+
+  get queueLimit(): number {
+    return this.opts.queueLimit ?? DEFAULT_QUEUE_LIMIT;
+  }
+
+  /** 当前队列快照（只读）：active 是处理中的任务，queued 按入队顺序 */
+  getQueueSnapshot(): QueueSnapshot {
+    const active = this.activeId ? this.opts.store.get(this.activeId) : undefined;
+    const queued = this.queue
+      .map((id) => this.opts.store.get(id))
+      .filter((task): task is Task => task !== undefined);
+    return {
+      active: active ? [active] : [],
+      queued,
+      queuedLimit: this.queueLimit,
+    };
+  }
 
   subscribe(taskId: string, cb: Listener): () => void {
     let set = this.subs.get(taskId);
@@ -57,7 +103,18 @@ export class TaskRunner {
     };
   }
 
+  /** 排队位是否已满（不含正在处理的任务） */
+  isQueueFull(): boolean {
+    return this.queue.length >= this.queueLimit;
+  }
+
+  /** 入队前的前置校验；路由层据此在落盘/下载前就拒绝，避免无谓的上传 */
+  assertQueueCapacity(): void {
+    if (this.isQueueFull()) throw new QueueFullError(this.queueLimit);
+  }
+
   enqueue(taskId: string): void {
+    this.assertQueueCapacity();
     this.queue.push(taskId);
     this.emit(taskId);
     void this.drain();
@@ -75,10 +132,16 @@ export class TaskRunner {
       while (this.queue.length > 0) {
         const id = this.queue.shift();
         if (id === undefined) continue;
-        await this.process(id);
+        this.activeId = id;
+        try {
+          await this.process(id);
+        } finally {
+          this.activeId = null;
+        }
       }
     } finally {
       this.running = false;
+      this.activeId = null;
       const waiters = this.idleResolvers.splice(0);
       for (const resolve of waiters) resolve();
     }

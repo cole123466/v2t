@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { taskDir } from "@/server/paths";
+import { QUEUE_FULL_CODE, QueueFullError, queueFullMessage } from "@/server/runner";
 import { getRuntime } from "@/server/runtime";
 import { isSupportedLink } from "@/server/source";
 import { errorFields, logInfo, logWarn } from "@/server/log";
@@ -25,6 +26,14 @@ export async function POST(req: Request) {
   }
 
   const { store, runner, dataDir, source } = getRuntime();
+
+  // 队列已满时不做 probe / 落库，直接拒绝
+  if (runner.isQueueFull()) {
+    return Response.json(
+      { error: queueFullMessage(runner.queueLimit), code: QUEUE_FULL_CODE },
+      { status: 429 },
+    );
+  }
 
   let meta;
   try {
@@ -70,6 +79,21 @@ export async function POST(req: Request) {
     title_chars: meta.title.length,
     duration_sec: meta.durationSec,
   });
-  runner.enqueue(task.id);
+  try {
+    runner.enqueue(task.id);
+  } catch (err) {
+    // probe 期间队列可能被占满：任务作废，避免留下永远排队的行
+    store.update(task.id, {
+      status: "failed",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    if (err instanceof QueueFullError) {
+      return Response.json(
+        { error: err.message, code: QUEUE_FULL_CODE, taskId: task.id },
+        { status: 429 },
+      );
+    }
+    throw err;
+  }
   return Response.json(store.get(task.id) ?? task, { status: 201 });
 }
