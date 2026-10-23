@@ -265,6 +265,8 @@ export interface GenerateArticleInput {
   purpose?: string | null;
   onProgress?: (event: { stage: string; message?: string }) => void;
   onDelta?: (delta: string) => void;
+  /** 客户端断开时中止后续章节的上游请求 */
+  signal?: AbortSignal;
 }
 
 export class ArticleService {
@@ -300,7 +302,7 @@ export class ArticleService {
           { role: "user", content: outlinePrompt(input.catalog, detail, purpose) },
         ],
         () => {},
-        { operation: "article.outline", taskId: input.taskId, traceId: input.traceId },
+        { operation: "article.outline", taskId: input.taskId, traceId: input.traceId, signal: input.signal },
       );
       const outline = this.parseOutline(outlineRaw);
       this.opts.store.update(record.id, { outline, title: outline.title });
@@ -315,6 +317,7 @@ export class ArticleService {
       // 第二步：逐章生成（每章一次调用，带该章相关画面）
       const sections = [] as Article["sections"];
       for (let i = 0; i < outline.sections.length; i++) {
+        if (input.signal?.aborted) throw new Error("客户端已断开，文章生成已中止");
         const section = outline.sections[i];
         input.onProgress?.({
           stage: "section",
@@ -369,6 +372,7 @@ export class ArticleService {
             operation: "article.section",
             taskId: input.taskId,
             traceId: input.traceId,
+            signal: input.signal,
           });
           try {
             parsed = JSON.parse(looseJsonBody(raw)) as SectionPayload;
