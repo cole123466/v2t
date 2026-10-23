@@ -42,7 +42,7 @@ export function ProcessPanel({ taskId }: { taskId: string }) {
 
   return (
     <div className="glass flex min-h-0 flex-1 flex-col rounded-2xl">
-      <div className="flex shrink-0 items-center justify-between border-b border-white/5 px-5 py-3">
+      <div className="flex shrink-0 items-center justify-between border-b border-tint/5 px-5 py-3">
         <p className="flex items-center gap-2 font-mono text-[10px] tracking-widest text-paper-faint">
           <Activity className="size-3.5" strokeWidth={1.5} />
           处理过程
@@ -66,7 +66,7 @@ export function ProcessPanel({ taskId }: { taskId: string }) {
             </p>
           </div>
         ) : (
-          <ol className="relative space-y-0.5 border-l border-white/10 pl-4">
+          <ol className="relative space-y-0.5 border-l border-tint/10 pl-4">
             {activities.map((a) => (
               <li key={a.id} className="relative py-2.5">
                 <span

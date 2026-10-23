@@ -34,19 +34,19 @@ function MindMapTree({
               node.sectionId
                 ? activeSection === node.sectionId
                   ? "bg-gold/10 text-gold"
-                  : "text-paper-dim hover:bg-white/5 hover:text-paper"
+                  : "text-paper-dim hover:bg-tint/5 hover:text-paper"
                 : "text-paper-faint"
             }`}
           >
             {node.sectionId ? (
               <ChevronRight className="mt-0.5 size-3 shrink-0" strokeWidth={1.5} />
             ) : (
-              <span className="mt-1.5 size-1 shrink-0 rounded-full bg-white/20" />
+              <span className="mt-1.5 size-1 shrink-0 rounded-full bg-tint/20" />
             )}
             <span>{node.label}</span>
           </button>
           {node.children?.length ? (
-            <div className="ml-3 border-l border-white/5 pl-1">
+            <div className="ml-3 border-l border-tint/5 pl-1">
               <MindMapTree
                 nodes={node.children}
                 activeSection={activeSection}
@@ -261,7 +261,7 @@ export function ArticlePanel({
               className={`rounded-lg border px-2.5 py-1 font-mono text-[10px] transition-colors ${
                 detail === opt.value
                   ? "border-gold/40 bg-gold/10 text-gold"
-                  : "border-white/10 text-paper-faint hover:text-paper-dim"
+                  : "border-tint/10 text-paper-faint hover:text-paper-dim"
               }`}
             >
               {opt.label}
@@ -273,7 +273,7 @@ export function ArticlePanel({
           value={purpose}
           onChange={(e) => setPurpose(e.target.value.slice(0, 500))}
           placeholder="本次关注点（可选，≤500 字）"
-          className="mt-2 w-full rounded-xl border border-white/10 bg-ink-950/60 px-3 py-2 text-xs text-paper outline-none transition-colors placeholder:text-paper-faint focus:border-gold/50"
+          className="mt-2 w-full rounded-xl border border-tint/10 bg-ink-950/60 px-3 py-2 text-xs text-paper outline-none transition-colors placeholder:text-paper-faint focus:border-gold/50"
         />
 
         <button
@@ -319,7 +319,7 @@ export function ArticlePanel({
           </p>
 
           {active.content.mindMap.length > 0 ? (
-            <div className="mt-5 rounded-xl border border-white/5 bg-white/[0.02] p-3">
+            <div className="mt-5 rounded-xl border border-tint/5 bg-tint/[0.02] p-3">
               <p className="mb-2 font-mono text-[10px] tracking-widest text-paper-faint">内容导图</p>
               <MindMapTree
                 nodes={active.content.mindMap}
@@ -377,7 +377,7 @@ export function ArticlePanel({
                 className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 font-mono text-[10px] transition-colors ${
                   a.id === active?.id
                     ? "border-gold/40 text-gold"
-                    : "border-white/10 text-paper-faint hover:text-paper-dim"
+                    : "border-tint/10 text-paper-faint hover:text-paper-dim"
                 }`}
               >
                 {a.status === "failed" ? (

@@ -101,7 +101,7 @@ export function QaPanel({
 
   return (
     <div className="glass flex h-[calc(100svh-170px)] min-h-[420px] flex-col rounded-2xl">
-      <div className="flex shrink-0 items-center justify-between border-b border-white/5 px-5 py-3">
+      <div className="flex shrink-0 items-center justify-between border-b border-tint/5 px-5 py-3">
         <p className="flex items-center gap-2 font-mono text-[10px] tracking-widest text-paper-faint">
           <MessageCircleQuestion className="size-3.5" strokeWidth={1.5} />
           围绕视频提问
@@ -123,7 +123,7 @@ export function QaPanel({
         {messages.map((message) =>
           message.role === "user" ? (
             <div key={message.id} className="flex justify-end">
-              <p className="max-w-[85%] rounded-2xl rounded-br-sm border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs leading-relaxed text-paper">
+              <p className="max-w-[85%] rounded-2xl rounded-br-sm border border-tint/10 bg-tint/[0.04] px-3.5 py-2 text-xs leading-relaxed text-paper">
                 {message.content}
               </p>
             </div>
@@ -165,7 +165,7 @@ export function QaPanel({
           <div className="space-y-2">
             {pendingQuestion ? (
               <div className="flex justify-end">
-                <p className="max-w-[85%] rounded-2xl rounded-br-sm border border-white/10 bg-white/[0.04] px-3.5 py-2 text-xs leading-relaxed text-paper-faint">
+                <p className="max-w-[85%] rounded-2xl rounded-br-sm border border-tint/10 bg-tint/[0.04] px-3.5 py-2 text-xs leading-relaxed text-paper-faint">
                   {pendingQuestion}
                 </p>
               </div>
@@ -188,7 +188,7 @@ export function QaPanel({
         <div ref={bottomRef} />
       </div>
 
-      <div className="shrink-0 border-t border-white/5 p-3">
+      <div className="shrink-0 border-t border-tint/5 p-3">
         <div className="flex items-end gap-2">
           <textarea
             value={question}
@@ -201,7 +201,7 @@ export function QaPanel({
             }}
             rows={2}
             placeholder="例如：3:05 那里讲的是什么？"
-            className="min-h-[44px] flex-1 resize-none rounded-xl border border-white/10 bg-ink-950/60 px-3 py-2 text-xs leading-relaxed text-paper outline-none transition-colors placeholder:text-paper-faint focus:border-gold/50"
+            className="min-h-[44px] flex-1 resize-none rounded-xl border border-tint/10 bg-ink-950/60 px-3 py-2 text-xs leading-relaxed text-paper outline-none transition-colors placeholder:text-paper-faint focus:border-gold/50"
           />
           <button
             type="button"

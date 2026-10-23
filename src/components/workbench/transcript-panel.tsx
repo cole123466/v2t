@@ -59,7 +59,7 @@ export function TranscriptPanel({
 
   return (
     <section className="glass flex h-full min-h-0 flex-col rounded-2xl">
-      <header className="flex items-center justify-between border-b border-white/5 px-5 py-3.5">
+      <header className="flex items-center justify-between border-b border-tint/5 px-5 py-3.5">
         <div>
           <h2 className="text-sm text-paper">文稿</h2>
           <p className="mt-0.5 font-mono text-[10px] tracking-widest text-paper-faint">
@@ -70,7 +70,7 @@ export function TranscriptPanel({
           <button
             type="button"
             onClick={copy}
-            className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1.5 font-mono text-[10px] tracking-wider text-paper-dim transition-colors hover:border-gold/60 hover:text-gold"
+            className="inline-flex items-center gap-1.5 rounded-full border border-tint/15 px-3 py-1.5 font-mono text-[10px] tracking-wider text-paper-dim transition-colors hover:border-gold/60 hover:text-gold"
           >
             {copied ? (
               <Check className="size-3" strokeWidth={1.5} />
@@ -82,7 +82,7 @@ export function TranscriptPanel({
           <button
             type="button"
             onClick={downloadSrt}
-            className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1.5 font-mono text-[10px] tracking-wider text-paper-dim transition-colors hover:border-gold/60 hover:text-gold"
+            className="inline-flex items-center gap-1.5 rounded-full border border-tint/15 px-3 py-1.5 font-mono text-[10px] tracking-wider text-paper-dim transition-colors hover:border-gold/60 hover:text-gold"
           >
             <Download className="size-3" strokeWidth={1.5} />
             SRT
@@ -106,7 +106,7 @@ export function TranscriptPanel({
                 onSeek(seg.start);
               }}
               className={`flex w-full items-start gap-4 rounded-xl px-4 py-2.5 text-left transition-colors ${
-                active ? "bg-white/[0.06]" : "hover:bg-white/[0.03]"
+                active ? "bg-tint/[0.06]" : "hover:bg-tint/[0.03]"
               }`}
             >
               <span
