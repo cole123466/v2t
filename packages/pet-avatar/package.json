@@ -1,0 +1,41 @@
+{
+  "name": "@v2tai/pet-avatar",
+  "version": "0.2.0",
+  "description": "Zero-dependency desktop pet runtime (Codex Pet v2 atlas) with a state-driven API.",
+  "type": "module",
+  "main": "./index.js",
+  "module": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "default": "./index.js"
+    },
+    "./element": "./pet.js",
+    "./pet.js": "./pet.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "pet.js",
+    "README.md"
+  ],
+  "sideEffects": [
+    "./pet.js",
+    "./index.js"
+  ],
+  "keywords": [
+    "desktop-pet",
+    "custom-element",
+    "web-component",
+    "codex-pet",
+    "sprite",
+    "animation"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
