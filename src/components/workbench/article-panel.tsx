@@ -6,6 +6,7 @@ import type { MindMapNode } from "@/server/article";
 import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
 import { ArticleBlockView } from "./article-block";
 import { RequestIdLine } from "./request-id";
+import { petFlow } from "@/components/pet/pet-flow";
 
 const DETAIL_OPTIONS: Array<{ value: ArticleDetailLevel; label: string; hint: string }> = [
   { value: "concise", label: "速览", hint: "800 字内，只留核心" },
@@ -127,6 +128,7 @@ export function ArticlePanel({
     setRequestId(null);
     setStreamText("");
     setStage("准备中");
+    petFlow.working();
     try {
       const res = await fetch(`/api/tasks/${taskId}/articles`, {
         method: "POST",
@@ -137,6 +139,7 @@ export function ArticlePanel({
         const data = (await res.json().catch(() => null)) as { error?: string } | null;
         setRequestId(res.headers.get("x-request-id"));
         setError(data?.error ?? `生成失败（${res.status}）`);
+        petFlow.failed();
         return;
       }
       const reader = res.body.getReader();
@@ -160,9 +163,11 @@ export function ArticlePanel({
             setStreamText((cur) => cur + String(data.delta ?? ""));
           } else if (event === "done") {
             setStage(null);
+            petFlow.done();
             await load();
             setSelected(String((data as { id?: string }).id ?? ""));
           } else if (event === "error") {
+            petFlow.failed();
             const problems = Array.isArray(data.problems) ? (data.problems as Array<{ field: string; message: string }>) : [];
             setRequestId(
               typeof data.request_id === "string"
@@ -179,6 +184,7 @@ export function ArticlePanel({
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      petFlow.failed();
     } finally {
       setBusy(false);
       setStage(null);

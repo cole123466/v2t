@@ -142,6 +142,10 @@ bash scripts/ci.sh   # 或 npm run ci
 - `LOG_LEVEL=debug` 可看逐段 ASR / 抽帧细节；`LOG_STACK=1` 让错误日志附带堆栈
 - 生产环境交给 journald，或直接重定向：`bash scripts/start-prod.sh --skip-build > app.log 2>&1`
 
+## 桌宠
+
+右下角挂了一只可拖动、会追光标的桌宠。运行时是 `public/pet-embed/pet.js`（零依赖，其他项目一句 `<script>` 就能引用），素材在 `public/pets/`；header 的猫按钮或宠物自身的悬停工具条可以换角色、隐藏、切静态模式。桌宠跟随业务状态：导入开始奔跑、排队等待、处理时检查、完成放大招，页面统一通过 `petFlow`（或元素的 `setState`/`pulse`）驱动。运行时/状态 API 已抽成独立包 `packages/pet-avatar`（`@v2tai/pet-avatar`，ESM + IIFE + 类型），其他项目可直接 `npm i file:` 接入。接入方式与图集规范见 [docs/pet-embed.md](docs/pet-embed.md)。
+
 ## 技术栈
 
 Next.js 16（App Router / Turbopack）· React 19 · Tailwind CSS v4 · motion · Lucide 图标；后端为 Next Route Handlers + 内置 `node:sqlite`，SSE 推送任务进度与生成流。

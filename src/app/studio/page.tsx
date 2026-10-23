@@ -9,6 +9,8 @@ import type { StorageStats } from "@/server/maintenance";
 import type { QueueSnapshot } from "@/server/runner";
 import { isProcessing, STATUS_LABEL } from "@/lib/task-status";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { PetToggle } from "@/components/pet/pet-toggle";
+import { petFlow } from "@/components/pet/pet-flow";
 
 const STATUS_META: Record<TaskStatus, { label: string; cls: string; dot: string }> = {
   queued: { label: STATUS_LABEL.queued, cls: "text-paper-faint", dot: "bg-paper-faint" },
@@ -208,6 +210,7 @@ export default function StudioPage() {
     if (!url || linkBusy) return;
     setError(null);
     setLinkBusy(true);
+    petFlow.importStart();
     try {
       const res = await fetch("/api/tasks/link", {
         method: "POST",
@@ -219,8 +222,10 @@ export default function StudioPage() {
         | null;
       if (!res.ok || !data || data.error) {
         setError(data?.error ?? `创建失败（${res.status}）`);
+        petFlow.importFailed();
         return;
       }
+      petFlow.importDone();
       router.push(`/task/${data.id}`);
     } finally {
       setLinkBusy(false);
@@ -232,6 +237,7 @@ export default function StudioPage() {
       if (uploading) return;
       setError(null);
       setUploading({ name: file.name, pct: 0 });
+      petFlow.importStart();
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `/api/tasks?name=${encodeURIComponent(file.name)}`);
       xhr.setRequestHeader("content-type", "application/octet-stream");
@@ -243,6 +249,7 @@ export default function StudioPage() {
       xhr.onload = () => {
         if (xhr.status === 201) {
           const task = JSON.parse(xhr.responseText) as Task;
+          petFlow.importDone();
           router.push(`/task/${task.id}`);
         } else {
           try {
@@ -250,11 +257,13 @@ export default function StudioPage() {
           } catch {
             setError(`上传失败（${xhr.status}）`);
           }
+          petFlow.importFailed();
           setUploading(null);
         }
       };
       xhr.onerror = () => {
         setError("网络中断，上传失败");
+        petFlow.importFailed();
         setUploading(null);
       };
       xhr.send(file);
@@ -302,6 +311,7 @@ export default function StudioPage() {
           </p>
         </div>
         <div className="flex items-center gap-4">
+          <PetToggle />
           <ThemeToggle />
           <Link
             href="/"

@@ -60,3 +60,9 @@ next-env.d.ts
 
 # agent 集成记录只保留本地，不入库
 docs/agents/
+
+# 桌宠角色素材（TYPE-MOON 同人作品，版权归权利人，不入库）
+# 获取方式见 docs/pet-embed.md「新增宠物」
+public/pets/*/
+public/pets/*.webp
+!public/pets/index.json

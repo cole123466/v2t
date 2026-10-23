@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import type { Task } from "@/server/tasks";
+import { petFlow } from "@/components/pet/pet-flow";
 import type { Transcript } from "@/server/asr";
 import { Player } from "@/components/workbench/player";
 import { Waveform } from "@/components/workbench/waveform";
@@ -29,6 +30,7 @@ import { ProcessPanel } from "@/components/workbench/process-panel";
 import { WaveBars } from "@/components/landing/wave-bars";
 import { SourceNotice } from "@/components/workbench/source-notice";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { PetToggle } from "@/components/pet/pet-toggle";
 import { clock } from "@/lib/time";
 
 const STAGES = [
@@ -106,6 +108,7 @@ export default function TaskPage() {
   const [playbackError, setPlaybackError] = useState(false);
   const [tab, setTab] = useState<TabKey>("transcript");
   const videoRef = useRef<HTMLVideoElement>(null);
+  const lastStatus = useRef<string | null>(null);
 
   useEffect(() => {
     void fetch(`/api/tasks/${id}`)
@@ -115,6 +118,31 @@ export default function TaskPage() {
     es.onmessage = (e) => setTask(JSON.parse(e.data) as Task);
     return () => es.close();
   }, [id]);
+
+  // 任务状态 → 桌宠状态。首次进入只同步基线，不补放“完成”庆祝；
+  // 后续真正的状态跃迁才触发一次性动作。
+  useEffect(() => {
+    const status = task?.status;
+    if (!status || lastStatus.current === status) return;
+    const first = lastStatus.current === null;
+    lastStatus.current = status;
+
+    if (status === "queued") petFlow.queued();
+    else if (status === "ready") {
+      if (first) petFlow.idle();
+      else petFlow.done();
+    } else if (status === "failed") petFlow.failed();
+    else petFlow.working();
+  }, [task?.status]);
+
+  // 离开任务页时收回桌宠，避免一直停在“检查/等待”
+  useEffect(() => {
+    return () => {
+      // 重置快照，保证 StrictMode 重挂载后能重新同步当前状态
+      lastStatus.current = null;
+      petFlow.idle();
+    };
+  }, []);
 
   useEffect(() => {
     if (task?.status === "ready" && !transcript) {
@@ -169,6 +197,7 @@ export default function TaskPage() {
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-4">
+        <PetToggle />
         <ThemeToggle />
         <Link
           href="/studio"

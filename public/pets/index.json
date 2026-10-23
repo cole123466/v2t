@@ -1,0 +1,41 @@
+{
+  "$comment": "桌宠索引。新增宠物：把 <id>/pet.json + spritesheet.webp + thumb.webp 放进 public/pets/，再在此追加一项。",
+  "version": 2,
+  "pets": [
+    {
+      "id": "saber",
+      "displayName": "Saber",
+      "description": "皇家蓝裙装与银甲，持 Excalibur。",
+      "src": "/pets/saber/pet.json",
+      "thumb": "/pets/saber/thumb.webp"
+    },
+    {
+      "id": "arcueid-brunestud",
+      "displayName": "Arcueid Brunestud",
+      "description": "白色上衣与紫色短裙，动作轻快。",
+      "src": "/pets/arcueid-brunestud/pet.json",
+      "thumb": "/pets/arcueid-brunestud/thumb.webp"
+    },
+    {
+      "id": "akiha-tohno",
+      "displayName": "Akiha Tohno",
+      "description": "沉稳的秋叶，工作思考时发色转为绯红。",
+      "src": "/pets/akiha-tohno/pet.json",
+      "thumb": "/pets/akiha-tohno/thumb.webp"
+    },
+    {
+      "id": "aoko-aozaki",
+      "displayName": "Aoko Aozaki",
+      "description": "自信的青子，带愠怒、疲惫与专注表情。",
+      "src": "/pets/aoko-aozaki/pet.json",
+      "thumb": "/pets/aoko-aozaki/thumb.webp"
+    },
+    {
+      "id": "ryougi-shiki",
+      "displayName": "Ryougi Shiki",
+      "description": "红色皮夹克与蓝色和服的式。",
+      "src": "/pets/ryougi-shiki/pet.json",
+      "thumb": "/pets/ryougi-shiki/thumb.webp"
+    }
+  ]
+}

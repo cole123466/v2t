@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pet-avatar · 嵌入示例</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: #08080b; color: #ece9e2;
+         font: 14px/1.7 system-ui, -apple-system, "PingFang SC", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 56px 24px 200px; }
+  h1 { font: 600 30px/1.2 Georgia, serif; margin: 0 0 8px; }
+  h2 { font: 600 13px/1.4 system-ui, sans-serif; letter-spacing: .12em;
+       text-transform: uppercase; color: #8b877f; margin: 32px 0 10px; }
+  p { color: #a6a29a; margin: 0 0 20px; }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: #d9a441; }
+  .list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  button { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 999px;
+           border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.03);
+           color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+  button:hover { border-color: rgba(217,164,65,.55); }
+  button[aria-pressed="true"] { border-color: #d9a441; background: rgba(217,164,65,.12); }
+  button.primary { border-color: rgba(217,164,65,.55); color: #d9a441; }
+  .item { justify-content: flex-start; text-align: left; }
+  .item img { width: 32px; height: 35px; object-fit: contain; border-radius: 6px; background: rgba(255,255,255,.05); }
+  pre { margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: rgba(255,255,255,.04);
+        border: 1px solid rgba(255,255,255,.08); color: #8b877f; font-size: 12px; min-height: 120px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<main>
+  <h1>pet-avatar</h1>
+  <p>零依赖桌宠运行时。除了动画，还把 <code>setState / pulse / sequence</code> 暴露给宿主，
+     用来把网页状态映射成桌宠动作。</p>
+
+  <h2>模拟业务流转</h2>
+  <div class="row">
+    <button class="primary" data-flow="import">模拟导入（奔跑 → 放大招）</button>
+    <button class="primary" data-flow="fail">模拟导入失败</button>
+    <button data-flow="reset">回到待机</button>
+  </div>
+
+  <h2>直接调用</h2>
+  <div class="row">
+    <button data-state="idle">idle 待机</button>
+    <button data-state="running">running 奔跑</button>
+    <button data-state="waiting">waiting 等待</button>
+    <button data-state="working">working 处理</button>
+    <button data-pulse="hello">hello 挥手</button>
+    <button data-pulse="success">success 放大招</button>
+    <button data-pulse="error">error 失败</button>
+    <button data-sequence="jumping,waving">sequence 连招</button>
+  </div>
+
+  <h2>切换角色</h2>
+  <div class="list" id="list"></div>
+
+  <h2>事件</h2>
+  <pre id="log">等待 pet-ready…</pre>
+</main>
+
+<script src="/pet-embed/pet.js" defer></script>
+
+<pet-avatar src="/pets/saber/pet.json" size="132" storage-key="pet-embed-demo"></pet-avatar>
+
+<script>
+  var pet = document.querySelector("pet-avatar");
+  var log = document.getElementById("log");
+  var lines = [];
+  function write(text) {
+    lines.push(new Date().toLocaleTimeString() + "  " + text);
+    log.textContent = lines.slice(-8).join("\n");
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    pet.addEventListener("pet-ready", function (event) {
+      write("pet-ready: " + event.detail.displayName + " (" + event.detail.id + ")");
+    });
+    pet.addEventListener("pet-error", function (event) {
+      write("pet-error: " + event.detail.error);
+    });
+    pet.addEventListener("pet-statechange", function (event) {
+      var d = event.detail;
+      write("statechange: animation=" + d.animation + " base=" + d.base + (d.busy ? " (busy)" : ""));
+    });
+
+    document.querySelectorAll("[data-state]").forEach(function (btn) {
+      btn.addEventListener("click", function () { pet.setState(btn.dataset.state); });
+    });
+    document.querySelectorAll("[data-pulse]").forEach(function (btn) {
+      btn.addEventListener("click", function () { pet.pulse(btn.dataset.pulse); });
+    });
+    document.querySelectorAll("[data-sequence]").forEach(function (btn) {
+      btn.addEventListener("click", function () { pet.sequence(btn.dataset.sequence.split(",")); });
+    });
+    document.querySelectorAll("[data-flow]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var flow = btn.dataset.flow;
+        if (flow === "import") {
+          pet.setState("running");
+          setTimeout(function () { pet.setState("idle"); pet.pulse("success"); }, 1500);
+          write("flow: 导入开始 -> 1.5s 后成功");
+        } else if (flow === "fail") {
+          pet.setState("running");
+          setTimeout(function () { pet.setState("idle"); pet.pulse("error"); }, 1200);
+          write("flow: 导入开始 -> 1.2s 后失败");
+        } else {
+          pet.setState("idle");
+          write("flow: 回到待机");
+        }
+      });
+    });
+
+    fetch("/pets/index.json")
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        var list = document.getElementById("list");
+        data.pets.forEach(function (entry) {
+          var button = document.createElement("button");
+          button.type = "button";
+          button.className = "item";
+          button.setAttribute("aria-pressed", String(entry.id === "saber"));
+          button.innerHTML =
+            '<img src="' + entry.thumb + '" alt="">' +
+            "<span>" + entry.displayName + "</span>";
+          button.addEventListener("click", function () {
+            pet.setPet(entry.src);
+            Array.prototype.forEach.call(list.children, function (node) {
+              node.setAttribute("aria-pressed", String(node === button));
+            });
+          });
+          list.appendChild(button);
+        });
+      });
+  });
+</script>
+</body>
+</html>

@@ -5,6 +5,7 @@ import "@fontsource/noto-serif-sc/900.css";
 import "./globals.css";
 import type { Metadata } from "next";
 import { THEME_INIT_SCRIPT } from "@/lib/theme";
+import { PetLayer } from "@/components/pet/pet-layer";
 
 export const metadata: Metadata = {
   title: {
@@ -24,6 +25,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       </head>
       <body className="min-h-full flex flex-col bg-ink-950 text-paper font-sans">
         {children}
+        <PetLayer />
         <div className="grain-overlay" aria-hidden />
       </body>
     </html>

@@ -9,7 +9,9 @@
     "lint": "eslint src tests",
     "ci": "bash scripts/ci.sh",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "pet:sync": "node scripts/sync-pet.mjs",
+    "pet:check": "node scripts/sync-pet.mjs --check"
   },
   "dependencies": {
     "@fontsource/noto-serif-sc": "^5.3.1",

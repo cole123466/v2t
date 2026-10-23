@@ -21,6 +21,18 @@ const nextConfig: NextConfig = {
       },
     },
   },
+  // 桌宠运行时与素材允许被其他站点用 <script>/<img> 直接引用（零依赖嵌入）。
+  // pet.json 走 fetch，必须带 CORS 头；图集本身只做 drawImage，不会被读像素。
+  async headers() {
+    const cors = [
+      { key: "Access-Control-Allow-Origin", value: "*" },
+      { key: "Cross-Origin-Resource-Policy", value: "cross-origin" },
+    ];
+    return [
+      { source: "/pet-embed/:path*", headers: cors },
+      { source: "/pets/:path*", headers: cors },
+    ];
+  },
 };
 
 export default nextConfig;

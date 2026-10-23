@@ -15,6 +15,7 @@ import {
 import { WaveBars } from "@/components/landing/wave-bars";
 import { QueueBadge } from "@/components/landing/queue-badge";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { PetToggle } from "@/components/pet/pet-toggle";
 
 const FEATURES = [
   {
@@ -74,6 +75,7 @@ function SiteHeader() {
         >
           核心能力
         </a>
+        <PetToggle />
         <ThemeToggle />
         <QueueBadge />
         <Link

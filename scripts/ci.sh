@@ -21,6 +21,7 @@ step() {
 step "lint" npm run lint
 step "typecheck" npm run typecheck
 step "test" npx vitest run
+step "pet package" bash -c 'node --check packages/pet-avatar/pet.js && npm run pet:check'
 step "build" npm run build
 
 printf '\n本地 CI 全部通过。\n'
