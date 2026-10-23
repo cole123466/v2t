@@ -54,9 +54,10 @@ nohup.out
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-.scratch/*.log
-.scratch/*.html
-.scratch/msg.txt
+
+# 本地草稿（日志/规划/试验脚本）与打包产物
+/.scratch/
+/dist/
 
 # agent 集成记录只保留本地，不入库
 docs/agents/
