@@ -51,6 +51,9 @@ export async function GET(
       });
     }
     const stream = createReadStream(file, { start, end });
+    // 客户端中断后 toWeb 写已关闭的 controller 会抛 ERR_INVALID_STATE，
+    // 吞掉读取端错误避免 uncaughtException 打死进程
+    stream.on("error", () => {});
     return new Response(Readable.toWeb(stream) as ReadableStream, {
       status: 206,
       headers: {
@@ -63,6 +66,7 @@ export async function GET(
   }
 
   const stream = createReadStream(file);
+  stream.on("error", () => {});
   return new Response(Readable.toWeb(stream) as ReadableStream, {
     headers: {
       "content-type": type,
