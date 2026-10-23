@@ -61,6 +61,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   );
 
   const encoder = new TextEncoder();
+  const abort = new AbortController();
+  req.signal.addEventListener("abort", () => abort.abort(), { once: true });
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (event: string, data: unknown) => {
@@ -81,6 +84,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           purpose,
           onProgress: (e) => send("progress", e),
           onDelta: (delta) => send("delta", { delta }),
+          signal: abort.signal,
         });
 
         // 发布前校验：结构 + 引用白名单（不通过则不标记为可用文章）
@@ -123,6 +127,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           // 已关闭
         }
       }
+    },
+    cancel() {
+      abort.abort();
     },
   });
 

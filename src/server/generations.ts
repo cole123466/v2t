@@ -132,6 +132,8 @@ export interface LLMCallMeta {
   operation?: string;
   taskId?: string;
   traceId?: string;
+  /** 客户端断开时中止上游流式请求，避免继续占用连接与内存 */
+  signal?: AbortSignal;
 }
 
 export interface LLMProvider {
@@ -188,6 +190,7 @@ export class GenerationService {
     input: GenerationInput,
     onChunk?: (delta: string) => void,
     traceId?: string,
+    signal?: AbortSignal,
   ): Promise<Generation> {
     const template =
       input.mode === "auto" ? PRESET_TEMPLATES.find((t) => t.id === input.templateId) : undefined;
@@ -229,7 +232,7 @@ export class GenerationService {
           gen.output += delta;
           onChunk?.(delta);
         },
-        { operation: `copywriting.${input.mode}`, taskId, traceId },
+        { operation: `copywriting.${input.mode}`, taskId, traceId, signal },
       );
       this.opts.store.update(gen.id, { output, status: "done" });
       logInfo("copywriting generation completed", {

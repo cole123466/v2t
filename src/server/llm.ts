@@ -80,6 +80,7 @@ async function streamOnce(
         "content-type": "application/json",
       },
       body: JSON.stringify({ model, messages, stream: true }),
+      signal: meta?.signal,
     });
   } catch (err) {
     logError("model request failed", { ...fields, ...errorFields(err), duration_ms: elapsedMs(startedAt) });
@@ -103,6 +104,11 @@ async function streamOnce(
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
+    // 客户端已断开：取消读取并释放上游连接（不继续攒正文）
+    if (meta?.signal?.aborted) {
+      await reader.cancel().catch(() => {});
+      throw new Error("请求已取消");
+    }
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";

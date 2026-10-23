@@ -4,6 +4,12 @@ import { promisify } from "node:util";
 
 const run = promisify(execFile);
 
+/**
+ * 转码类调用不需要 stdout：显式截断到 1KB，避免 execFile 默认的 1MB 缓冲
+ * 在异常输出（进度、告警）时长时间驻留。
+ */
+const QUIET: { maxBuffer: number } = { maxBuffer: 1024 };
+
 // 统一的 16kHz 单声道 MP3 规格参数（ASR 输入约定）
 const AUDIO_ARGS = ["-vn", "-ac", "1", "-ar", "16000", "-codec:a", "libmp3lame", "-b:a", "48k"];
 
@@ -53,7 +59,7 @@ export async function extractAudio(input: string, output: string): Promise<void>
       "-i", input,
       ...AUDIO_ARGS,
       "-y", output,
-    ]);
+    ], QUIET);
   } catch (err) {
     toolError("ffmpeg", input, (err as { stderr?: string }).stderr);
   }
@@ -83,7 +89,7 @@ export async function chunkAudio(
         "-ss", String(start), "-t", String(dur), "-i", input,
         ...AUDIO_ARGS,
         "-y", file,
-      ]);
+      ], QUIET);
     } catch (err) {
       toolError("ffmpeg", input, (err as { stderr?: string }).stderr);
     }
