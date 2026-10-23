@@ -76,7 +76,7 @@ export async function extractFramesAt(
         "-vf", `scale=${width}:-2`,
         "-q:v", String(quality),
         "-y", target,
-      ]);
+      ], { maxBuffer: 1024 });
       const size = await stat(target).catch(() => null);
       if (!size || size.size === 0) continue;
       frames.push({ id, tSec: Number(seek.toFixed(3)), file: `frames/${name}`, kind: opts.kind, width });
