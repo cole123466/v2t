@@ -29,15 +29,43 @@ export interface Runtime extends MaintenanceDeps {
   source: SourceProvider;
 }
 
+/**
+ * Runtime 结构版本：增删公开成员（如给 TaskRunner 加方法）时必须 +1。
+ * dev 模式下 HMR 只替换模块、不清 globalThis，旧实例会与旧类一起留在内存里；
+ * 不做版本校验就会出现「代码已是新的、拿到的 runner 还是旧的」——
+ * 例如调用 runner.isQueueFull() 抛 "is not a function"。
+ */
+export const RUNTIME_VERSION = 2;
+
+interface CachedRuntime {
+  version: number;
+  runtime: Runtime;
+}
+
 // dev 模式下 HMR 会重建模块，用 globalThis 保住单例连接、队列与定时器
 const globalForV2t = globalThis as {
-  __v2tRuntime?: Runtime;
+  __v2tRuntime?: CachedRuntime;
   __v2tPurgeTimer?: ReturnType<typeof setInterval>;
 };
 
 const PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export function getRuntime(): Runtime {
+  // 版本不符（HMR 后代码已更新）则重建，避免复用缺少新方法的旧实例
+  const cached = globalForV2t.__v2tRuntime;
+  if (cached && cached.version !== RUNTIME_VERSION) {
+    logWarn("runtime version changed; rebuilding", {
+      from: cached.version,
+      to: RUNTIME_VERSION,
+    });
+    // 旧 SQLite 连接与定时器需要显式释放：新实例会重新打开同一 DB 文件
+    cached.runtime.db.close();
+    if (globalForV2t.__v2tPurgeTimer) {
+      clearInterval(globalForV2t.__v2tPurgeTimer);
+      globalForV2t.__v2tPurgeTimer = undefined;
+    }
+    globalForV2t.__v2tRuntime = undefined;
+  }
   if (!globalForV2t.__v2tRuntime) {
     const dataDir = getDataDir();
     mkdirSync(path.join(dataDir, "tasks"), { recursive: true });
@@ -76,7 +104,7 @@ export function getRuntime(): Runtime {
       dataDir,
       source,
     };
-    globalForV2t.__v2tRuntime = runtime;
+    globalForV2t.__v2tRuntime = { version: RUNTIME_VERSION, runtime };
 
     logInfo("runtime initialised", {
       data_dir: dataDir,
@@ -107,5 +135,5 @@ export function getRuntime(): Runtime {
       globalForV2t.__v2tPurgeTimer.unref?.();
     }
   }
-  return globalForV2t.__v2tRuntime;
+  return globalForV2t.__v2tRuntime.runtime;
 }
