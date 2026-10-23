@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Archive, ChevronRight, Download, FileText, Loader, RotateCcw, X } from "lucide-react";
 import type { MindMapNode } from "@/server/article";
 import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
@@ -80,6 +80,12 @@ export function ArticlePanel({
   const [purpose, setPurpose] = useState("");
   const [citationTimes, setCitationTimes] = useState<Map<string, number>>(new Map());
   const [exporting, setExporting] = useState<"md" | "zip" | null>(null);
+  // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => abortRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     void fetch(`/api/tasks/${taskId}/citations`)
@@ -129,11 +135,14 @@ export function ArticlePanel({
     setStreamText("");
     setStage("准备中");
     petFlow.working();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     try {
       const res = await fetch(`/api/tasks/${taskId}/articles`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ detailLevel: detail, purpose }),
+        signal: ctrl.signal,
       });
       if (!res.ok || !res.body) {
         const data = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -183,9 +192,11 @@ export function ArticlePanel({
         }
       }
     } catch (err) {
+      if (ctrl.signal.aborted) return; // 卸载/中断不算失败，不发桌宠信号
       setError(err instanceof Error ? err.message : String(err));
       petFlow.failed();
     } finally {
+      if (abortRef.current === ctrl) abortRef.current = null;
       setBusy(false);
       setStage(null);
     }
