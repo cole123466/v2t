@@ -547,6 +547,8 @@
 
   PetAvatar.prototype._onPointerMove = function (event) {
     if (this._still || !this._img || this._drag) return;
+    // 只在待机时环视：一次性动作与业务状态（跑动/等待/处理）不被鼠标视线盖住
+    if (this._busy || this._baseState !== "idle") return;
     var cx = this._x + this._w / 2;
     var cy = this._y + this._h * 0.34;
     var dx = event.clientX - cx;
