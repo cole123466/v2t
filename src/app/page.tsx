@@ -13,6 +13,7 @@ import {
   Upload,
 } from "lucide-react";
 import { WaveBars } from "@/components/landing/wave-bars";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const FEATURES = [
   {
@@ -51,7 +52,7 @@ export default function Home() {
       <Narrative />
       <Features />
       <FinalCall />
-      <footer className="flex flex-col gap-2 border-t border-white/5 px-6 py-8 font-mono text-[10px] tracking-widest text-paper-faint sm:flex-row sm:items-center sm:justify-between md:px-10">
+      <footer className="flex flex-col gap-2 border-t border-tint/5 px-6 py-8 font-mono text-[10px] tracking-widest text-paper-faint sm:flex-row sm:items-center sm:justify-between md:px-10">
         <span>V2T — LOCAL VIDEO COPY STATION</span>
         <span>FFMPEG INSIDE</span>
       </footer>
@@ -72,6 +73,7 @@ function SiteHeader() {
         >
           核心能力
         </a>
+        <ThemeToggle />
         <Link
           href="/studio"
           className="rounded-full border border-gold/40 px-4 py-1.5 font-mono text-[11px] tracking-widest text-gold transition-colors hover:bg-gold hover:text-ink-950"
@@ -88,7 +90,7 @@ function Hero() {
     <section className="relative flex min-h-svh flex-col items-center justify-center gap-7 px-6 text-center">
       <WaveBars
         count={110}
-        className="absolute inset-x-0 top-1/2 h-44 -translate-y-1/2 text-white/[0.045]"
+        className="absolute inset-x-0 top-1/2 h-44 -translate-y-1/2 text-tint/[0.045]"
       />
       <p
         className="relative font-mono text-[11px] tracking-[0.35em] text-gold"
@@ -164,7 +166,7 @@ function Narrative() {
             <Corner className="bottom-4 left-4 border-b border-l" />
             <Corner className="bottom-4 right-4 border-b border-r" />
             <div className="absolute inset-0 flex items-center justify-center">
-              <span className="flex size-16 items-center justify-center rounded-full border border-white/15 text-paper">
+              <span className="flex size-16 items-center justify-center rounded-full border border-tint/15 text-paper">
                 <Play className="size-6 translate-x-0.5" strokeWidth={1.5} />
               </span>
             </div>
@@ -193,7 +195,7 @@ function Narrative() {
             {TRANSCRIPT_PREVIEW.map((row, i) => (
               <div
                 key={row.t}
-                className="flex items-baseline gap-4 border-b border-white/5 py-3.5 last:border-none md:py-4"
+                className="flex items-baseline gap-4 border-b border-tint/5 py-3.5 last:border-none md:py-4"
                 style={{
                   animation: `rise 0.8s var(--ease-smooth) ${(0.15 + i * 0.18).toFixed(2)}s both`,
                 }}
@@ -236,7 +238,7 @@ function Narrative() {
         </div>
 
         {/* 右侧进度轨 */}
-        <div className="absolute right-6 top-1/2 hidden h-40 w-px -translate-y-1/2 bg-white/10 md:right-10 md:block">
+        <div className="absolute right-6 top-1/2 hidden h-40 w-px -translate-y-1/2 bg-tint/10 md:right-10 md:block">
           <motion.div style={{ scaleY: railFill }} className="h-full w-full origin-top bg-gold" />
         </div>
       </div>
@@ -245,7 +247,7 @@ function Narrative() {
 }
 
 function Corner({ className }: { className: string }) {
-  return <span className={`absolute size-5 border-white/25 ${className}`} aria-hidden />;
+  return <span className={`absolute size-5 border-tint/25 ${className}`} aria-hidden />;
 }
 
 function ActLabel({ no, en, cn, line }: { no: string; en: string; cn: string; line: string }) {
@@ -275,7 +277,7 @@ function Features() {
             transition={{ duration: 0.7, delay: i * 0.08, ease: [0.22, 1, 0.36, 1] }}
             className="glass flex flex-col gap-4 rounded-2xl p-6"
           >
-            <span className="flex size-11 items-center justify-center rounded-full border border-white/10 text-gold">
+            <span className="flex size-11 items-center justify-center rounded-full border border-tint/10 text-gold">
               <f.icon className="size-5" strokeWidth={1.5} />
             </span>
             <h3 className="text-base text-paper">{f.title}</h3>
@@ -290,7 +292,7 @@ function Features() {
 function FinalCall() {
   return (
     <section className="relative flex flex-col items-center gap-8 px-6 py-32 text-center md:py-40">
-      <WaveBars count={72} className="absolute inset-x-0 top-8 h-20 text-white/[0.04]" />
+      <WaveBars count={72} className="absolute inset-x-0 top-8 h-20 text-tint/[0.04]" />
       <p className="relative font-mono text-[11px] tracking-[0.35em] text-gold">
         READY WHEN YOU ARE
       </p>

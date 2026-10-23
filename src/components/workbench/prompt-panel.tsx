@@ -167,7 +167,7 @@ export function PromptPanel({
             className={`rounded-full border px-3 py-1.5 text-xs transition-colors disabled:opacity-50 ${
               selected === t.id && prompt.trim().length === 0
                 ? "border-gold/60 bg-gold/10 text-gold"
-                : "border-white/15 text-paper-dim hover:border-gold/40 hover:text-paper"
+                : "border-tint/15 text-paper-dim hover:border-gold/40 hover:text-paper"
             }`}
           >
             {t.label}
@@ -181,7 +181,7 @@ export function PromptPanel({
         disabled={phase === "streaming"}
         rows={3}
         placeholder="自定义提示词（留空则使用所选模板）"
-        className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-3 text-xs leading-relaxed text-paper outline-none transition-colors placeholder:text-paper-faint focus:border-gold/50 disabled:opacity-50"
+        className="w-full resize-none rounded-xl border border-tint/10 bg-tint/[0.03] px-3.5 py-3 text-xs leading-relaxed text-paper outline-none transition-colors placeholder:text-paper-faint focus:border-gold/50 disabled:opacity-50"
       />
 
       <button
@@ -213,7 +213,7 @@ export function PromptPanel({
               <button
                 type="button"
                 onClick={copy}
-                className="inline-flex items-center gap-1 rounded-full border border-white/15 px-2.5 py-1 font-mono text-[10px] text-paper-dim transition-colors hover:border-gold/60 hover:text-gold"
+                className="inline-flex items-center gap-1 rounded-full border border-tint/15 px-2.5 py-1 font-mono text-[10px] text-paper-dim transition-colors hover:border-gold/60 hover:text-gold"
               >
                 {copied ? <Check className="size-3" strokeWidth={1.5} /> : <Copy className="size-3" strokeWidth={1.5} />}
                 {copied ? "已复制" : "复制"}
@@ -221,7 +221,7 @@ export function PromptPanel({
               <button
                 type="button"
                 onClick={download}
-                className="inline-flex items-center gap-1 rounded-full border border-white/15 px-2.5 py-1 font-mono text-[10px] text-paper-dim transition-colors hover:border-gold/60 hover:text-gold"
+                className="inline-flex items-center gap-1 rounded-full border border-tint/15 px-2.5 py-1 font-mono text-[10px] text-paper-dim transition-colors hover:border-gold/60 hover:text-gold"
               >
                 <Download className="size-3" strokeWidth={1.5} />
                 MD
@@ -230,7 +230,7 @@ export function PromptPanel({
           </div>
           <div
             ref={outputRef}
-            className="max-h-72 min-h-32 overflow-y-auto rounded-xl border border-white/5 bg-white/[0.02] p-4 text-sm leading-relaxed text-paper-dim"
+            className="max-h-72 min-h-32 overflow-y-auto rounded-xl border border-tint/5 bg-tint/[0.02] p-4 text-sm leading-relaxed text-paper-dim"
           >
             <span className="whitespace-pre-wrap">
               {activeOutput || (phase === "streaming" ? "等待第一个字…" : "")}
@@ -258,7 +258,7 @@ export function PromptPanel({
                     setPhase("idle");
                   }}
                   className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors ${
-                    activeId === gen.id ? "bg-white/[0.06] text-paper" : "text-paper-faint hover:bg-white/[0.03]"
+                    activeId === gen.id ? "bg-tint/[0.06] text-paper" : "text-paper-faint hover:bg-tint/[0.03]"
                   }`}
                 >
                   {gen.status === "failed" ? (

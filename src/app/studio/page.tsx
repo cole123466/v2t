@@ -7,6 +7,7 @@ import { ArrowLeft, Check, Link2, Loader, Trash2, Upload, X } from "lucide-react
 import type { Task, TaskStatus } from "@/server/tasks";
 import type { StorageStats } from "@/server/maintenance";
 import { isProcessing, STATUS_LABEL } from "@/lib/task-status";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const STATUS_META: Record<TaskStatus, { label: string; cls: string; dot: string }> = {
   queued: { label: STATUS_LABEL.queued, cls: "text-paper-faint", dot: "bg-paper-faint" },
@@ -225,13 +226,16 @@ export default function StudioPage() {
             UPLOAD / EXTRACT / TRANSCRIBE
           </p>
         </div>
-        <Link
-          href="/"
-          className="inline-flex items-center gap-2 font-mono text-xs tracking-widest text-paper-faint transition-colors hover:text-gold"
-        >
-          <ArrowLeft className="size-3.5" strokeWidth={1.5} />
-          V2T
-        </Link>
+        <div className="flex items-center gap-4">
+          <ThemeToggle />
+          <Link
+            href="/"
+            className="inline-flex items-center gap-2 font-mono text-xs tracking-widest text-paper-faint transition-colors hover:text-gold"
+          >
+            <ArrowLeft className="size-3.5" strokeWidth={1.5} />
+            V2T
+          </Link>
+        </div>
       </header>
 
       <div className="grid gap-5 md:grid-cols-[1fr_260px]">
@@ -246,7 +250,7 @@ export default function StudioPage() {
               <Loader className="size-9 animate-spin text-gold" strokeWidth={1.5} />
               <div className="text-center">
                 <p className="max-w-sm truncate text-sm text-paper">{uploading.name}</p>
-                <div className="mx-auto mt-4 h-1 w-64 overflow-hidden rounded-full bg-white/10">
+                <div className="mx-auto mt-4 h-1 w-64 overflow-hidden rounded-full bg-tint/10">
                   <div
                     className="h-full rounded-full bg-gold transition-all"
                     style={{ width: `${uploading.pct}%` }}
@@ -294,10 +298,10 @@ export default function StudioPage() {
                 if (e.key === "Enter") void probeLink();
               }}
               placeholder="https://www.bilibili.com/video/BV..."
-              className="w-full rounded-xl border border-white/10 bg-ink-950/60 px-3 py-2 font-mono text-xs text-paper outline-none transition-colors placeholder:text-paper-faint focus:border-gold/50"
+              className="w-full rounded-xl border border-tint/10 bg-ink-950/60 px-3 py-2 font-mono text-xs text-paper outline-none transition-colors placeholder:text-paper-faint focus:border-gold/50"
             />
             {linkMeta ? (
-              <div className="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2">
+              <div className="rounded-xl border border-tint/5 bg-tint/[0.03] px-3 py-2">
                 <p className="line-clamp-2 text-xs text-paper-dim">{linkMeta.title}</p>
                 {linkMeta.durationSec !== null ? (
                   <p className="mt-1 font-mono text-[10px] text-paper-faint">
@@ -312,7 +316,7 @@ export default function StudioPage() {
                 type="button"
                 onClick={() => void probeLink()}
                 disabled={linkBusy || !linkUrl.trim()}
-                className="flex-1 rounded-xl border border-white/10 px-3 py-2 font-mono text-[11px] tracking-wider text-paper-dim transition-colors hover:border-gold/40 hover:text-gold disabled:opacity-40"
+                className="flex-1 rounded-xl border border-tint/10 px-3 py-2 font-mono text-[11px] tracking-wider text-paper-dim transition-colors hover:border-gold/40 hover:text-gold disabled:opacity-40"
               >
                 {linkBusy ? "解析中" : "解析"}
               </button>
@@ -348,7 +352,7 @@ export default function StudioPage() {
         {tasks.length === 0 ? (
           <p className="mt-6 text-sm text-paper-faint">还没有任务——从上传一个视频开始。</p>
         ) : (
-          <ul className="mt-4 divide-y divide-white/5">
+          <ul className="mt-4 divide-y divide-tint/5">
             {tasks.map((task) => {
               const meta = STATUS_META[task.status];
               const processing = isProcessing(task.status);
@@ -356,7 +360,7 @@ export default function StudioPage() {
                 <li key={task.id} className="flex items-center gap-2">
                   <Link
                     href={`/task/${task.id}`}
-                    className="group flex min-w-0 flex-1 items-center gap-4 py-4 transition-colors hover:bg-white/[0.02]"
+                    className="group flex min-w-0 flex-1 items-center gap-4 py-4 transition-colors hover:bg-tint/[0.02]"
                   >
                     <span className={`size-1.5 shrink-0 rounded-full ${meta.dot}`} />
                     <div className="min-w-0 flex-1">
@@ -396,7 +400,7 @@ export default function StudioPage() {
                     className={`flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 font-mono text-[10px] transition-colors disabled:opacity-30 ${
                       confirmDelete === task.id
                         ? "border-danger/50 text-danger"
-                        : "border-transparent text-paper-faint hover:border-white/15 hover:text-paper"
+                        : "border-transparent text-paper-faint hover:border-tint/15 hover:text-paper"
                     }`}
                   >
                     {confirmDelete === task.id ? (

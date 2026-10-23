@@ -1,20 +1,69 @@
 @import "tailwindcss";
 
-@theme {
-  /* 暗色影院 · 色板 */
-  --color-ink-950: #060608;
-  --color-ink-900: #0a0a0e;
-  --color-ink-800: #121218;
-  --color-ink-700: #1b1b24;
-  --color-paper: #ece9e2;
-  --color-paper-dim: #a6a29a;
-  --color-paper-faint: #6d6a64;
-  --color-gold: #d9a441;
-  --color-gold-deep: #a87a28;
-  /* 语义色：成功 / 危险（暗色影院语境下的低饱和） */
-  --color-positive: #7fbf9a;
-  --color-danger: #d98b8b;
+/*
+ * 浅色 / 深色主题：所有颜色先落到 --v2t-* 运行时变量，
+ * 再由 @theme inline 映射成 Tailwind 色板（bg-ink-950、text-paper…）。
+ * 深色是原「暗色影院」配色，挂在 .dark 上；浅色为默认 :root。
+ * 主题由 src/lib/theme.ts 的内联脚本在首屏前写入 <html class="dark">。
+ */
+@theme inline {
+  --color-ink-950: var(--v2t-ink-950);
+  --color-ink-900: var(--v2t-ink-900);
+  --color-ink-800: var(--v2t-ink-800);
+  --color-ink-700: var(--v2t-ink-700);
+  --color-paper: var(--v2t-paper);
+  --color-paper-dim: var(--v2t-paper-dim);
+  --color-paper-faint: var(--v2t-paper-faint);
+  --color-gold: var(--v2t-gold);
+  --color-gold-deep: var(--v2t-gold-deep);
+  --color-positive: var(--v2t-positive);
+  --color-danger: var(--v2t-danger);
+  /* tint 是「叠加层」基色：深色为白、浅色为墨，供 bg-tint/5、border-tint/10 这类半透明描边使用 */
+  --color-tint: var(--v2t-tint);
+}
 
+:root {
+  --v2t-ink-950: #f6f3ec;
+  --v2t-ink-900: #efeae1;
+  --v2t-ink-800: #e6e0d5;
+  --v2t-ink-700: #d5cec1;
+  --v2t-paper: #16130e;
+  --v2t-paper-dim: #4b463f;
+  --v2t-paper-faint: #6b655c;
+  --v2t-gold: #8a6114;
+  --v2t-gold-deep: #6f4c0d;
+  --v2t-positive: #2f6f4c;
+  --v2t-danger: #a8443f;
+  --v2t-tint: #16130e;
+  --v2t-glass-bg: rgb(22 19 14 / 0.035);
+  --v2t-glass-border: rgb(22 19 14 / 0.1);
+  --v2t-grain-opacity: 0.03;
+  /* canvas 波形无法用 color-mix，直接给可读的 rgba 值 */
+  --v2t-wave-active: #8a6114;
+  --v2t-wave-idle: rgb(22 19 14 / 0.22);
+}
+
+.dark {
+  --v2t-ink-950: #060608;
+  --v2t-ink-900: #0a0a0e;
+  --v2t-ink-800: #121218;
+  --v2t-ink-700: #1b1b24;
+  --v2t-paper: #ece9e2;
+  --v2t-paper-dim: #a6a29a;
+  --v2t-paper-faint: #6d6a64;
+  --v2t-gold: #d9a441;
+  --v2t-gold-deep: #a87a28;
+  --v2t-positive: #7fbf9a;
+  --v2t-danger: #d98b8b;
+  --v2t-tint: #ffffff;
+  --v2t-glass-bg: rgb(255 255 255 / 0.04);
+  --v2t-glass-border: rgb(255 255 255 / 0.08);
+  --v2t-grain-opacity: 0.045;
+  --v2t-wave-active: #d9a441;
+  --v2t-wave-idle: rgb(236 233 226 / 0.22);
+}
+
+@theme {
   /* 字体：display 衬线（英文巨字 + 中文大字事件），正文系统无衬线 */
   --font-display: "Playfair Display", "Noto Serif SC", ui-serif, Georgia, serif;
   --font-sans: "Segoe UI", system-ui, -apple-system, "PingFang SC",
@@ -56,28 +105,32 @@
 }
 
 html {
+  color-scheme: light;
+}
+
+.dark {
   color-scheme: dark;
 }
 
 body {
-  background: var(--color-ink-950);
-  color: var(--color-paper);
+  background: var(--v2t-ink-950);
+  color: var(--v2t-paper);
 }
 
 ::selection {
-  background: var(--color-gold);
-  color: var(--color-ink-950);
+  background: var(--v2t-gold);
+  color: var(--v2t-ink-950);
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--color-ink-700) transparent;
+  scrollbar-color: var(--v2t-ink-700) transparent;
 }
 
 /* 玻璃质感 */
 @utility glass {
-  background: rgb(255 255 255 / 0.04);
-  border: 1px solid rgb(255 255 255 / 0.08);
+  background: var(--v2t-glass-bg);
+  border: 1px solid var(--v2t-glass-border);
   backdrop-filter: blur(20px);
 }
 
@@ -87,6 +140,6 @@ body {
   inset: 0;
   z-index: 100;
   pointer-events: none;
-  opacity: 0.045;
+  opacity: var(--v2t-grain-opacity);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
 }

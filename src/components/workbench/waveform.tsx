@@ -61,6 +61,10 @@ export function Waveform({
 
   useEffect(() => {
     let raf = 0;
+    // 画布颜色取自主题变量；缓存下来，避免每帧都触发 getComputedStyle 的样式重算
+    let cachedDark: boolean | null = null;
+    let activeColor = "#d9a441";
+    let idleColor = "rgba(236,233,226,0.22)";
     const draw = () => {
       const canvas = canvasRef.current;
       const peaks = peaksRef.current;
@@ -76,13 +80,25 @@ export function Waveform({
         if (c) {
           c.setTransform(dpr, 0, 0, dpr, 0, 0);
           c.clearRect(0, 0, w, h);
+          // 主题切换后下一帧重新取色，其余帧复用缓存
+          const isDark = document.documentElement.classList.contains("dark");
+          if (isDark !== cachedDark) {
+            cachedDark = isDark;
+            const styles = getComputedStyle(canvas);
+            activeColor =
+              styles.getPropertyValue("--v2t-wave-active").trim() ||
+              (isDark ? "#d9a441" : "#8a6114");
+            idleColor =
+              styles.getPropertyValue("--v2t-wave-idle").trim() ||
+              (isDark ? "rgba(236,233,226,0.22)" : "rgba(22,19,14,0.22)");
+          }
           const video = videoRef.current;
           const dur = video && Number.isFinite(video.duration) ? video.duration : 0;
           const frac = dur > 0 && video ? Math.min(1, video.currentTime / dur) : 0;
           const barW = w / peaks.length;
           for (let i = 0; i < peaks.length; i++) {
             const barH = Math.max(1.5, peaks[i] * h * 0.9);
-            c.fillStyle = i / peaks.length <= frac ? "#d9a441" : "rgba(236,233,226,0.22)";
+            c.fillStyle = i / peaks.length <= frac ? activeColor : idleColor;
             c.fillRect(i * barW, (h - barH) / 2, Math.max(1, barW - 1.2), barH);
           }
         }

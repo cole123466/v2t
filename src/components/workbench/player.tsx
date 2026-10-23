@@ -45,7 +45,7 @@ export function Player({
   };
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-white/10 bg-black">
+    <div className="overflow-hidden rounded-2xl border border-tint/10 bg-black">
       <video
         ref={videoRef}
         src={src}
@@ -64,12 +64,12 @@ export function Player({
         onError={onError}
       />
 
-      <div className="flex items-center gap-4 border-t border-white/10 bg-ink-900/90 px-4 py-3">
+      <div className="flex items-center gap-4 border-t border-tint/10 bg-ink-900/90 px-4 py-3">
         <button
           type="button"
           onClick={toggle}
           aria-label={playing ? "暂停" : "播放"}
-          className="flex size-9 shrink-0 items-center justify-center rounded-full border border-white/15 text-paper transition-colors hover:border-gold/60 hover:text-gold"
+          className="flex size-9 shrink-0 items-center justify-center rounded-full border border-tint/15 text-paper transition-colors hover:border-gold/60 hover:text-gold"
         >
           {playing ? (
             <Pause className="size-4" strokeWidth={1.5} />
@@ -103,7 +103,7 @@ export function Player({
             draggingRef.current = false;
           }}
         >
-          <div className="relative top-1/2 h-1 -translate-y-1/2 overflow-hidden rounded-full bg-white/15 transition-all group-hover:h-1.5">
+          <div className="relative top-1/2 h-1 -translate-y-1/2 overflow-hidden rounded-full bg-tint/15 transition-all group-hover:h-1.5">
             <div
               className="absolute inset-y-0 left-0 rounded-full bg-gold"
               style={{ width: `${pct * 100}%` }}
@@ -118,7 +118,7 @@ export function Player({
             setSpeedIdx(next);
             if (videoRef.current) videoRef.current.playbackRate = SPEEDS[next];
           }}
-          className="shrink-0 rounded-full border border-white/15 px-3 py-1 font-mono text-[11px] text-paper-dim transition-colors hover:border-gold/60 hover:text-gold"
+          className="shrink-0 rounded-full border border-tint/15 px-3 py-1 font-mono text-[11px] text-paper-dim transition-colors hover:border-gold/60 hover:text-gold"
         >
           {SPEEDS[speedIdx]}x
         </button>

@@ -9,7 +9,7 @@ function withMarks(text: string, marks: InlineMark[]) {
   let node: ReactNode = text;
   if (marks.includes("code")) {
     node = (
-      <code className="rounded bg-white/10 px-1 py-0.5 font-mono text-[0.9em] text-paper">{node}</code>
+      <code className="rounded bg-tint/10 px-1 py-0.5 font-mono text-[0.9em] text-paper">{node}</code>
     );
   }
   if (marks.includes("bold")) node = <strong className="font-semibold text-paper">{node}</strong>;
@@ -96,7 +96,7 @@ function ArticleFrame({
   const [failed, setFailed] = useState(false);
   if (failed) return null;
   return (
-    <figure className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
+    <figure className="overflow-hidden rounded-xl border border-tint/10 bg-tint/[0.02]">
       <button
         type="button"
         onClick={() => onSeek(tSec)}
@@ -166,9 +166,9 @@ export function ArticleBlockView({
     }
     case "code":
       return (
-        <div className="overflow-hidden rounded-xl border border-white/10 bg-ink-950/80">
+        <div className="overflow-hidden rounded-xl border border-tint/10 bg-ink-950/80">
           {block.lang ? (
-            <p className="border-b border-white/5 px-3 py-1 font-mono text-[10px] tracking-wider text-paper-faint">
+            <p className="border-b border-tint/5 px-3 py-1 font-mono text-[10px] tracking-wider text-paper-faint">
               {block.lang}
             </p>
           ) : null}
@@ -179,10 +179,10 @@ export function ArticleBlockView({
       );
     case "table":
       return (
-        <figure className="overflow-hidden rounded-xl border border-white/10">
+        <figure className="overflow-hidden rounded-xl border border-tint/10">
           <div className="overflow-x-auto">
             <table className="w-full min-w-max border-collapse text-left text-xs">
-              <thead className="bg-white/5 text-paper">
+              <thead className="bg-tint/5 text-paper">
                 <tr>
                   {block.header.map((cell, i) => (
                     <th key={i} className="px-3 py-2 font-medium">
@@ -193,7 +193,7 @@ export function ArticleBlockView({
               </thead>
               <tbody className="text-paper-dim">
                 {block.rows.map((row, ri) => (
-                  <tr key={ri} className="border-t border-white/5 odd:bg-white/[0.02]">
+                  <tr key={ri} className="border-t border-tint/5 odd:bg-tint/[0.02]">
                     {row.map((cell, ci) => (
                       <td key={ci} className="px-3 py-2 align-top">
                         <InlineText text={cell} times={times} onSeek={onSeek} />
@@ -205,7 +205,7 @@ export function ArticleBlockView({
             </table>
           </div>
           {block.caption ? (
-            <figcaption className="border-t border-white/5 px-3 py-1.5 text-[10px] text-paper-faint">
+            <figcaption className="border-t border-tint/5 px-3 py-1.5 text-[10px] text-paper-faint">
               <InlineText text={block.caption} times={times} onSeek={onSeek} />
             </figcaption>
           ) : null}

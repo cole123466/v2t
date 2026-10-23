@@ -28,6 +28,7 @@ import { QaPanel } from "@/components/workbench/qa-panel";
 import { ProcessPanel } from "@/components/workbench/process-panel";
 import { WaveBars } from "@/components/landing/wave-bars";
 import { SourceNotice } from "@/components/workbench/source-notice";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { clock } from "@/lib/time";
 
 const STAGES = [
@@ -84,7 +85,7 @@ function ProgressWave({ progress }: { progress: number }) {
   const revealed = Math.min(100, Math.max(0, progress));
   return (
     <div className="relative h-16" aria-hidden>
-      <WaveBars count={64} className="absolute inset-0 text-white/[0.07]" />
+      <WaveBars count={64} className="absolute inset-0 text-tint/[0.07]" />
       <div
         className="pointer-events-none absolute inset-0 transition-[clip-path] duration-700"
         style={{ clipPath: `inset(0 ${100 - revealed}% 0 0)` }}
@@ -167,13 +168,16 @@ export default function TaskPage() {
           {task.status.toUpperCase()}
         </p>
       </div>
-      <Link
-        href="/studio"
-        className="inline-flex shrink-0 items-center gap-2 font-mono text-xs tracking-widest text-paper-faint transition-colors hover:text-gold"
-      >
-        <ArrowLeft className="size-3.5" strokeWidth={1.5} />
-        工作台
-      </Link>
+      <div className="flex shrink-0 items-center gap-4">
+        <ThemeToggle />
+        <Link
+          href="/studio"
+          className="inline-flex shrink-0 items-center gap-2 font-mono text-xs tracking-widest text-paper-faint transition-colors hover:text-gold"
+        >
+          <ArrowLeft className="size-3.5" strokeWidth={1.5} />
+          工作台
+        </Link>
+      </div>
     </header>
   );
 
@@ -221,7 +225,7 @@ export default function TaskPage() {
                         <Loader className="size-4 animate-spin" strokeWidth={1.5} />
                       </span>
                     ) : (
-                      <span className="flex size-8 items-center justify-center rounded-full border border-white/10 text-paper-faint">
+                      <span className="flex size-8 items-center justify-center rounded-full border border-tint/10 text-paper-faint">
                         <stage.icon className="size-4" strokeWidth={1.5} />
                       </span>
                     )}
@@ -232,7 +236,7 @@ export default function TaskPage() {
                     </span>
                   </div>
                   {i < STAGES.length - 1 ? (
-                    <div className={`mx-2 h-px flex-1 ${done ? "bg-positive/40" : "bg-white/10"}`} />
+                    <div className={`mx-2 h-px flex-1 ${done ? "bg-positive/40" : "bg-tint/10"}`} />
                   ) : null}
                 </div>
               );
@@ -240,7 +244,7 @@ export default function TaskPage() {
           </div>
 
           <div>
-            <div className="h-1 overflow-hidden rounded-full bg-white/10">
+            <div className="h-1 overflow-hidden rounded-full bg-tint/10">
               <div
                 className="h-full rounded-full bg-gold transition-all duration-500"
                 style={{ width: `${task.progress}%` }}
@@ -349,7 +353,7 @@ export default function TaskPage() {
                 className={`flex flex-1 items-center justify-center gap-1.5 rounded-xl px-2 py-1.5 font-mono text-[10px] tracking-wider transition-colors ${
                   tab === key
                     ? "bg-gold/10 text-gold"
-                    : "text-paper-faint hover:bg-white/[0.03] hover:text-paper-dim"
+                    : "text-paper-faint hover:bg-tint/[0.03] hover:text-paper-dim"
                 }`}
               >
                 <Icon className="size-3" strokeWidth={1.5} />
@@ -379,7 +383,7 @@ export default function TaskPage() {
                     播放视频时，这里会跟随高亮当前句；也可以直接在左侧文稿里点击任意一句跳转。
                   </p>
                 )}
-                <div className="mt-6 border-t border-white/5 pt-4">
+                <div className="mt-6 border-t border-tint/5 pt-4">
                   <p className="font-mono text-[10px] tracking-widest text-paper-faint">
                     转写来源
                   </p>
