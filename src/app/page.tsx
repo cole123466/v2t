@@ -13,6 +13,7 @@ import {
   Upload,
 } from "lucide-react";
 import { WaveBars } from "@/components/landing/wave-bars";
+import { QueueBadge } from "@/components/landing/queue-badge";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 const FEATURES = [
@@ -74,6 +75,7 @@ function SiteHeader() {
           核心能力
         </a>
         <ThemeToggle />
+        <QueueBadge />
         <Link
           href="/studio"
           className="rounded-full border border-gold/40 px-4 py-1.5 font-mono text-[11px] tracking-widest text-gold transition-colors hover:bg-gold hover:text-ink-950"

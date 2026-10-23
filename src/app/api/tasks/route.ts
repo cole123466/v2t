@@ -6,6 +6,7 @@ import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 import { getMaxUploadBytes } from "@/server/config";
 import { sourcePath, taskDir } from "@/server/paths";
+import { QUEUE_FULL_CODE, QueueFullError, queueFullMessage } from "@/server/runner";
 import { getRuntime } from "@/server/runtime";
 import { logInfo, logWarn } from "@/server/log";
 import { requestId } from "@/server/request";
@@ -38,6 +39,15 @@ export async function POST(req: Request) {
   }
 
   const { store, runner, dataDir } = getRuntime();
+
+  // 队列已满时在接收文件体之前就拒绝，避免白传一个 2GB 文件
+  if (runner.isQueueFull()) {
+    return Response.json(
+      { error: queueFullMessage(runner.queueLimit), code: QUEUE_FULL_CODE },
+      { status: 429 },
+    );
+  }
+
   const task = store.create({ originalName, ext, sizeBytes });
   const dir = taskDir(dataDir, task.id);
   const dest = sourcePath(dir, ext);
@@ -72,6 +82,23 @@ export async function POST(req: Request) {
     return fail("上传不完整", 500);
   }
 
+  try {
+    runner.enqueue(task.id);
+  } catch (err) {
+    // 上传期间别的请求可能占满队列：任务作废，避免留下永远排队的行
+    store.update(task.id, {
+      status: "failed",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    if (err instanceof QueueFullError) {
+      return Response.json(
+        { error: err.message, code: QUEUE_FULL_CODE, taskId: task.id },
+        { status: 429 },
+      );
+    }
+    throw err;
+  }
+
   logInfo("upload accepted", {
     task_id: task.id,
     trace_id: traceId,
@@ -79,7 +106,6 @@ export async function POST(req: Request) {
     bytes: sizeBytes,
     ext,
   });
-  runner.enqueue(task.id);
   return Response.json(task, { status: 201 });
 }
 

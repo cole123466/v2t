@@ -50,7 +50,7 @@ describe("B 站风控提示写入任务", () => {
     const create = vi.fn(() => task);
     mocks.getRuntime.mockReturnValue({
       store: { create, get: () => task, update: vi.fn() },
-      runner: { enqueue: vi.fn() },
+      runner: { enqueue: vi.fn(), isQueueFull: () => false, queueLimit: 3 },
       dataDir: dir,
       source: {
         probe: vi.fn(async () => ({
