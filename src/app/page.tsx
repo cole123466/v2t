@@ -211,32 +211,40 @@ function Narrative() {
           </div>
         </motion.div>
 
+        {/* 底部渐隐：让幕次字幕压在画面/波形/文稿上时依然可读 */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-ink-950 via-ink-950/70 to-transparent md:h-36"
+        />
+
         {/* 幕次字幕（绝对定位于同一锚点，随进度交叉淡入） */}
-        <div className="absolute bottom-10 left-6 h-28 md:left-10">
-          <motion.div style={{ opacity: act1 }} className="absolute bottom-0 left-0">
-            <ActLabel
-              no="ACT I"
-              en="THE FRAME"
-              cn="画面"
-              line="一切从一帧画面开始。上传你的视频，本地解码。"
-            />
-          </motion.div>
-          <motion.div style={{ opacity: act2 }} className="absolute bottom-0 left-0">
-            <ActLabel
-              no="ACT II"
-              en="THE WAVE"
-              cn="声波"
-              line="画面退去，声音显形。16kHz 单声道，每一秒都被听见。"
-            />
-          </motion.div>
-          <motion.div style={{ opacity: act3 }} className="absolute bottom-0 left-0">
-            <ActLabel
-              no="ACT III"
-              en="THE TEXT"
-              cn="文字"
-              line="声波落定成文字。句句带时间戳，点击即回放。"
-            />
-          </motion.div>
+        <div className="absolute inset-x-0 bottom-8 px-6 md:bottom-10 md:px-10">
+          <div className="relative h-28 max-w-sm">
+            <motion.div style={{ opacity: act1 }} className="absolute inset-x-0 bottom-0">
+              <ActLabel
+                no="ACT I"
+                en="THE FRAME"
+                cn="画面"
+                line="一切从一帧画面开始。上传你的视频，本地解码。"
+              />
+            </motion.div>
+            <motion.div style={{ opacity: act2 }} className="absolute inset-x-0 bottom-0">
+              <ActLabel
+                no="ACT II"
+                en="THE WAVE"
+                cn="声波"
+                line="画面退去，声音显形。16kHz 单声道，每一秒都被听见。"
+              />
+            </motion.div>
+            <motion.div style={{ opacity: act3 }} className="absolute inset-x-0 bottom-0">
+              <ActLabel
+                no="ACT III"
+                en="THE TEXT"
+                cn="文字"
+                line="声波落定成文字。句句带时间戳，点击即回放。"
+              />
+            </motion.div>
+          </div>
         </div>
 
         {/* 右侧进度轨 */}
@@ -255,11 +263,20 @@ function Corner({ className }: { className: string }) {
 function ActLabel({ no, en, cn, line }: { no: string; en: string; cn: string; line: string }) {
   return (
     <span className="block max-w-xs">
-      <span className="block font-mono text-[10px] tracking-[0.3em] text-gold">
-        {no} — {en}
+      <span className="flex items-center gap-2.5 font-mono text-[10px] leading-none text-gold">
+        <span className="size-1 shrink-0 rounded-full bg-gold" aria-hidden />
+        <span className="tracking-[0.3em]">{no}</span>
+        <span className="h-px w-5 shrink-0 bg-gold/35" aria-hidden />
+        <span className="truncate tracking-[0.22em] text-paper-faint">{en}</span>
       </span>
-      <span className="mt-2 block font-display text-4xl font-black">{cn}</span>
-      <span className="mt-2 block text-xs leading-relaxed text-paper-dim">{line}</span>
+      <span className="mt-3 flex items-center gap-3">
+        <span className="font-display text-3xl font-bold leading-none md:text-4xl">{cn}</span>
+        <span
+          className="h-px flex-1 bg-gradient-to-r from-gold/45 to-transparent"
+          aria-hidden
+        />
+      </span>
+      <span className="mt-2.5 block text-xs leading-relaxed text-paper-dim">{line}</span>
     </span>
   );
 }
