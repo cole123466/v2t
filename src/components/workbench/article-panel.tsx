@@ -89,7 +89,7 @@ export function ArticlePanel({
   const [detail, setDetail] = useState<ArticleDetailLevel>("standard");
   const [purpose, setPurpose] = useState("");
   const [citationTimes, setCitationTimes] = useState<Map<string, number>>(new Map());
-  const [exporting, setExporting] = useState<"md" | "zip" | "html" | null>(null);
+  const [exporting, setExporting] = useState<"md" | "zip" | "html" | "pdf" | null>(null);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
   const abortRef = useRef<AbortController | null>(null);
 
@@ -212,20 +212,64 @@ export function ArticlePanel({
     }
   };
 
-  // PDF 走「浏览器打印」：服务端出带打印样式的自包含 HTML，新窗口打开后唤起打印面板，
-  // 用户选「另存为 PDF」即得矢量文本、中文字体原生的 PDF（不引入 puppeteer/jsPDF）。
-  const exportPdf = () => {
+  // PDF 走「浏览器打印」：复用 HTML 导出产物（自包含、图片内联），在离屏 iframe 里渲染后
+  // 唤起打印面板，用户选「另存为 PDF」即得矢量文本、中文字体原生的 PDF（不引入 puppeteer/jsPDF）。
+  // 不用 window.open：新窗口会被弹窗拦截，且离开页面后打印面板与页面生命周期不同步。
+  const exportPdf = async () => {
     if (!active || exporting) return;
-    const url = `/api/tasks/${active.id}/export?format=print`;
-    // 不能带 noopener 特性：那样 window.open 恒返回 null，无法区分「被拦截」。
-    // 打开后立刻切断 opener，效果等同 noopener。
-    const win = window.open(url, "_blank");
-    if (!win) {
-      setError("PDF 导出被浏览器拦截了新窗口，请允许弹出窗口后重试");
-      return;
+    setExporting("pdf");
+    setError(null);
+    const url = `/api/tasks/${taskId}/articles/${active.id}/export?format=html`;
+    let iframe: HTMLIFrameElement | null = null;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        const detail = (await res.json().catch(() => null)) as { error?: string } | null;
+        setError(detail?.error ?? `导出失败（${res.status}）`);
+        return;
+      }
+      // 用 blob URL 而不是 srcdoc：data URL 形式的图片在 srcdoc 里会被部分浏览器按同源策略拦下
+      const blob = await res.blob();
+      iframe = document.createElement("iframe");
+      iframe.setAttribute("aria-hidden", "true");
+      iframe.tabIndex = -1;
+      // 必须给接近 A4 的视口尺寸：若缩成 1px，文档会按窄屏排版（响应式断点生效），
+      // 打印出来行宽和分栏都不对。改成移到屏幕外而不是隐藏，避免部分浏览器不打印不可见 iframe。
+      iframe.style.position = "fixed";
+      iframe.style.left = "-10000px";
+      iframe.style.top = "0";
+      iframe.style.width = "820px";
+      iframe.style.height = "1160px";
+      iframe.style.border = "0";
+      iframe.style.pointerEvents = "none";
+
+      const objectUrl = URL.createObjectURL(blob);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          if (!iframe) return reject(new Error("iframe 初始化失败"));
+          iframe.onload = () => resolve();
+          iframe.onerror = () => reject(new Error("打印页面加载失败"));
+          iframe.src = objectUrl;
+          document.body.appendChild(iframe);
+        });
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+
+      const frameWindow = iframe.contentWindow;
+      if (!frameWindow) throw new Error("无法访问打印页面");
+      frameWindow.focus();
+      // 打印面板是异步弹出的，iframe 在打印结束前不能移除，否则会打出空白页。
+      // 以 afterprint 为准清理，再用兜底定时器处理用户直接关掉面板等不触发事件的情况。
+      frameWindow.addEventListener("afterprint", () => iframe?.remove(), { once: true });
+      window.setTimeout(() => iframe?.remove(), 5 * 60_000);
+      frameWindow.print();
+    } catch (err) {
+      iframe?.remove();
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExporting(null);
     }
-    win.opener = null;
-    win.focus();
   };
 
   const download = async (format: "md" | "zip" | "html") => {
@@ -266,12 +310,16 @@ export function ArticlePanel({
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
               <button
                 type="button"
-                onClick={exportPdf}
+                onClick={() => void exportPdf()}
                 disabled={exporting !== null}
                 className="inline-flex items-center gap-1 rounded-lg border border-gold/40 bg-gold/10 px-2 py-1 font-mono text-[10px] text-gold transition-colors hover:bg-gold/20 disabled:opacity-50"
-                title="打开打印排版页，选择「另存为 PDF」"
+                title="按 HTML 排版打开打印面板，选择「另存为 PDF」"
               >
-                <Printer className="size-3" strokeWidth={1.5} />
+                {exporting === "pdf" ? (
+                  <Loader className="size-3 animate-spin" strokeWidth={1.5} />
+                ) : (
+                  <Printer className="size-3" strokeWidth={1.5} />
+                )}
                 导出 PDF
               </button>
               <button
