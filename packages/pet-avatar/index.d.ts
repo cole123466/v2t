@@ -27,8 +27,8 @@ export interface PetState {
 export interface PetSignalDetail {
   /** 持久状态，会一直循环到下一次状态变化 */
   state?: PetBaseState;
-  /** 一次性动作，播完回到当前持久状态 */
-  pulse?: PetPulse;
+  /** 一次性动作，播完回到当前持久状态；包清单 presets 声明的自定义语义名同样可播 */
+  pulse?: PetPulse | (string & {});
 }
 
 export interface MountPetOptions {
@@ -70,8 +70,8 @@ export interface PetAvatarElement extends HTMLElement {
   play(name: PetAnimation): boolean;
   /** 持久状态 */
   setState(state: PetBaseState): PetState;
-  /** 一次性动作，播完回到持久状态 */
-  pulse(pulse: PetPulse | PetAnimation): boolean;
+  /** 一次性动作，播完回到持久状态；清单 presets 声明过的自定义语义名也可用 */
+  pulse(name: PetPulse | PetAnimation | (string & {})): boolean;
   /** 自定义串行动作（只接受一次性动作） */
   sequence(list: Array<PetPulse | PetAnimation>): boolean;
   getState(): PetState;
@@ -85,6 +85,8 @@ export declare const ELEMENT_NAME: "pet-avatar";
 export declare const PET_SIGNAL_EVENT: "v2t:pet-signal";
 export declare const BASE_STATES: Readonly<Record<PetBaseState, PetAnimation>>;
 export declare const PRESETS: Readonly<Record<PetPulse, PetAnimation[]>>;
+/** 特效默认色（pet.json 的 fx 字段可按角色覆盖） */
+export declare const FX_COLORS: Readonly<Record<"success" | "error", string>>;
 
 export declare function getPetAvatar(): PetAvatarStatic | null;
 export declare function registerPet(): Promise<PetAvatarStatic | null>;
@@ -122,5 +124,6 @@ declare const _default: {
   petSignal: typeof petSignal;
   onPetSignal: typeof onPetSignal;
   petFlow: typeof petFlow;
+  FX_COLORS: typeof FX_COLORS;
 };
 export default _default;

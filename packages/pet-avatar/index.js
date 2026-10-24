@@ -21,6 +21,12 @@ export const PRESETS = Object.freeze({
   jump: ["jumping"],
 });
 
+/** 特效默认色（pet.json 的 fx 字段可按角色覆盖） */
+export const FX_COLORS = Object.freeze({
+  success: "#d9a441",
+  error: "#d95046",
+});
+
 export function getPetAvatar() {
   if (typeof window === "undefined") return null;
   return window.PetAvatar || null;
@@ -90,4 +96,5 @@ export default {
   petSignal,
   onPetSignal,
   petFlow,
+  FX_COLORS,
 };

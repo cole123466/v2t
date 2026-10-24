@@ -35,6 +35,10 @@
     hello: ["waving"],
     jump: ["jumping"]
   };
+  // 语义名 → 特效样式（清单 presets[].fx 可覆盖；只认 success / error）
+  var PRESET_FX = { success: "success", error: "error" };
+  // 特效默认色，经 CSS 变量注入宿主（清单 fx 按角色换色）
+  var FX_DEFAULT = { success: "#d9a441", error: "#d95046" };
   var FX_MS = 1000;
   var LOOK_HOLD_MS = 1400;   // 指针停下后，保持环视姿态的时长
   var LOOK_TICK_MS = 140;
@@ -44,6 +48,23 @@
   function num(value, fallback) {
     var n = parseFloat(value);
     return isFinite(n) ? n : fallback;
+  }
+
+  function builtInPresets() {
+    var out = {};
+    for (var name in PRESETS) {
+      if (Object.prototype.hasOwnProperty.call(PRESETS, name)) {
+        out[name] = { sequence: PRESETS[name].slice(), fx: PRESET_FX[name] || null };
+      }
+    }
+    return out;
+  }
+
+  /** 特效颜色只收 hex / rgb() 字面量，防 CSS 注入 */
+  function safeColor(value) {
+    if (typeof value !== "string") return false;
+    return /^#[0-9a-fA-F]{3,8}$/.test(value) ||
+      /^rgba?\(\s*\d{1,3}(?:\.\d+)?\s*,\s*\d{1,3}(?:\.\d+)?\s*,\s*\d{1,3}(?:\.\d+)?\s*(?:,\s*(?:0|1|0?\.\d+)\s*)?\)$/.test(value);
   }
 
   function safeStorage() {
@@ -99,9 +120,9 @@
     ".btn:hover,.btn:focus-visible{background:rgba(217,164,65,.94);color:#141008;border-color:transparent;outline:none}",
     "canvas{position:relative;z-index:1}",
     ".fx{position:absolute;inset:-20% -12%;border-radius:50%;pointer-events:none;opacity:0;z-index:0;",
-    "background:radial-gradient(circle at 50% 58%,rgba(217,164,65,.55) 0%,rgba(217,164,65,.18) 42%,rgba(217,164,65,0) 68%)}",
+    "background:radial-gradient(circle at 50% 58%,color-mix(in srgb,var(--pet-fx-success,#d9a441) 55%,transparent) 0%,color-mix(in srgb,var(--pet-fx-success,#d9a441) 18%,transparent) 42%,transparent 68%)}",
     ".fx.on{animation:pet-burst .95s cubic-bezier(.22,1,.36,1) both}",
-    ":host([data-fx=error]) .fx{background:radial-gradient(circle at 50% 58%,rgba(217,80,70,.5) 0%,rgba(217,80,70,.16) 42%,rgba(217,80,70,0) 68%)}",
+    ":host([data-fx=error]) .fx{background:radial-gradient(circle at 50% 58%,color-mix(in srgb,var(--pet-fx-error,#d95046) 50%,transparent) 0%,color-mix(in srgb,var(--pet-fx-error,#d95046) 16%,transparent) 42%,transparent 68%)}",
     ":host([data-fx]) canvas{transform-origin:50% 82%;animation:pet-pop .9s cubic-bezier(.22,1,.36,1) both}",
     "@keyframes pet-burst{0%{opacity:.95;transform:scale(.45)}70%{opacity:.45}100%{opacity:0;transform:scale(1.25)}}",
     "@keyframes pet-pop{0%{transform:scale(1)}28%{transform:scale(1.14)}100%{transform:scale(1)}}",
@@ -133,6 +154,8 @@
     this._queue = [];
     this._pendingAdvance = false;
     this._busy = false;
+    this._presets = builtInPresets();
+    this._anims = null;
     this._fxTimer = 0;
     this._frame = 0;
     this._curRow = -1;
@@ -212,20 +235,29 @@
 
   /**
    * 播放一次性语义动作，结束后回到当前持久状态：
-   * success（放大招）| error | hello | jump，也可以直接传动作行名。
+   * success（放大招）| error | hello | jump，也可以直接传动作行名；
+   * 清单 presets 声明过的自定义语义名同样可播。
    */
   PetAvatar.prototype.pulse = function (name) {
-    var seq = PRESETS[name];
-    if (!seq) {
-      // 只接受一次性动作；循环状态请用 setState
-      if (!ANIM[name] || ANIM[name].loop) return false;
+    var preset = this._presets && Object.prototype.hasOwnProperty.call(this._presets, name)
+      ? this._presets[name]
+      : null;
+    var seq, fx;
+    if (preset) {
+      seq = preset.sequence;
+      fx = preset.fx;
+    } else {
+      // 未编排的名字只接受一次性动作；循环状态请用 setState
+      var anim = this._animOf(name);
+      if (!anim || anim.loop) return false;
       seq = [name];
+      fx = null;
     }
     if (!seq.length || this._still) return false;
     this._queue = seq.slice();
     this._pendingAdvance = false;
     this._busy = true;
-    if (name === "success" || name === "error") this._fx(name);
+    if (fx) this._fx(fx);
     this._advance();
     return true;
   };
@@ -236,7 +268,8 @@
     var seq = [];
     for (var i = 0; i < list.length; i += 1) {
       // 序列只编排一次性动作，循环动作会堵住队列
-      if (ANIM[list[i]] && !ANIM[list[i]].loop) seq.push(list[i]);
+      var anim = this._animOf(list[i]);
+      if (anim && !anim.loop) seq.push(list[i]);
     }
     if (!seq.length || this._still) return false;
     this._queue = seq;
@@ -350,6 +383,7 @@
         self._frames = Array.isArray(manifest.frames) && manifest.frames.length >= 9
           ? manifest.frames.map(function (n) { return Math.max(1, Math.min(ATLAS.cols, n | 0)); })
           : DEFAULT_FRAMES.slice();
+        self._applyManifest(manifest);
         var sheet = manifest.spritesheetPath || "spritesheet.webp";
         var url = new URL(sheet, new URL(src, document.baseURI)).href;
         return loadImage(url);
@@ -388,10 +422,89 @@
     this._canvas.setAttribute("aria-label", label);
   };
 
+  /**
+   * 清单可选声明覆盖内置编排，全部缺省即旧行为（向后兼容）：
+   *   anims   — 动作行 fps/loop 微调，如 { "idle": { "fps": 5 } }
+   *   presets — 语义动作编排，如 { "success": { "sequence": ["jumping","waving"], "fx": "success" } }
+   *   fx      — 特效颜色，如 { "success": "#d9a441" }
+   * sequence 只收一次性动作；fx 只认 success / error / none，未声明沿用语义默认。
+   */
+  PetAvatar.prototype._applyManifest = function (manifest) {
+    var name, entry, i;
+
+    // anims 先合并，presets 校验时才能拿到最新的 loop 语义
+    var overrides = null;
+    var raw = manifest && manifest.anims;
+    if (raw && typeof raw === "object") {
+      for (name in raw) {
+        if (!Object.prototype.hasOwnProperty.call(raw, name) || !ANIM[name]) continue;
+        entry = raw[name];
+        if (!entry || typeof entry !== "object") continue;
+        var fps = parseFloat(entry.fps);
+        overrides = overrides || {};
+        overrides[name] = {
+          fps: isFinite(fps) && fps >= 1 && fps <= 60 ? fps : null,
+          loop: typeof entry.loop === "boolean" ? entry.loop : null
+        };
+      }
+    }
+    this._anims = overrides;
+
+    var presets = builtInPresets();
+    raw = manifest && manifest.presets;
+    if (raw && typeof raw === "object") {
+      for (name in raw) {
+        if (!Object.prototype.hasOwnProperty.call(raw, name)) continue;
+        entry = raw[name];
+        if (!entry || typeof entry !== "object" || !Array.isArray(entry.sequence)) continue;
+        var seq = [];
+        for (i = 0; i < entry.sequence.length; i += 1) {
+          var anim = this._animOf(entry.sequence[i]);
+          if (anim && !anim.loop) seq.push(entry.sequence[i]);
+        }
+        if (!seq.length) continue;
+        presets[name] = {
+          sequence: seq,
+          fx: entry.fx === "success" || entry.fx === "error"
+            ? entry.fx
+            : entry.fx === "none" ? null : PRESET_FX[name] || null
+        };
+      }
+    }
+    this._presets = presets;
+
+    var colors = { success: FX_DEFAULT.success, error: FX_DEFAULT.error };
+    raw = manifest && manifest.fx;
+    if (raw && typeof raw === "object") {
+      var kinds = ["success", "error"];
+      for (i = 0; i < kinds.length; i += 1) {
+        if (safeColor(raw[kinds[i]])) colors[kinds[i]] = raw[kinds[i]];
+      }
+    }
+    for (var kind in colors) {
+      if (Object.prototype.hasOwnProperty.call(colors, kind)) {
+        this.style.setProperty("--pet-fx-" + kind, colors[kind]);
+      }
+    }
+  };
+
   /* ---------- 绘制与播放 ---------- */
 
+  /** 名称 → {row,fps,loop}：叠加清单 anims 的 fps/loop 覆盖后的生效视图 */
+  PetAvatar.prototype._animOf = function (name) {
+    var base = ANIM[name];
+    if (!base) return null;
+    var over = this._anims && this._anims[name];
+    if (!over) return base;
+    return {
+      row: base.row,
+      fps: typeof over.fps === "number" ? over.fps : base.fps,
+      loop: typeof over.loop === "boolean" ? over.loop : base.loop
+    };
+  };
+
   PetAvatar.prototype._stateRow = function () {
-    var anim = ANIM[this._stateName] || ANIM.idle;
+    var anim = this._animOf(this._stateName) || ANIM.idle;
     return anim.row;
   };
 
@@ -413,7 +526,7 @@
   };
 
   PetAvatar.prototype._enter = function (name) {
-    var anim = ANIM[name];
+    var anim = this._animOf(name);
     if (!anim) return;
     var changed = this._stateName !== name;
     this._stateName = name;
@@ -499,7 +612,7 @@
   PetAvatar.prototype._start = function () {
     if (this._still || this._paused || this.hasAttribute("hidden") || this.isConnected === false || !this._img) return;
     if (this._timer) return;
-    var anim = ANIM[this._stateName] || ANIM.idle;
+    var anim = this._animOf(this._stateName) || ANIM.idle;
     this._schedule(1000 / anim.fps);
   };
 
@@ -521,7 +634,7 @@
       return;
     }
 
-    var anim = ANIM[this._stateName] || ANIM.idle;
+    var anim = this._animOf(this._stateName) || ANIM.idle;
     var total = this._frames ? (this._frames[anim.row] || DEFAULT_FRAMES[anim.row]) : DEFAULT_FRAMES[anim.row];
     if (this._frame >= total) this._frame = 0;
 
@@ -773,7 +886,7 @@
   window.customElements.define("pet-avatar", PetAvatar);
 
   window.PetAvatar = {
-    version: "1.0.0",
+    version: "1.1.0",
     elementName: "pet-avatar",
     atlas: ATLAS,
     baseStates: BASE_ANIM,

@@ -85,6 +85,13 @@ pet.resume();
 状态映射：`running→行7`、`waiting→行6`、`working→行8 review`；
 `success` = 连跳两次 + 挥手 + 金色爆发。
 
+## 清单编排（按角色覆盖，运行时 ≥1.1.0）
+
+上面的编排与特效色都是内置默认值；包的 pet.json 可以按角色声明
+`presets`（语义 → 动作序列 + 特效）、`fx`（特效颜色）与 `anims`（fps/loop 微调），
+字段全部可选。声明后宿主可直接 `pet.pulse("<自定义语义名>")`。
+字段格式见 `docs/pet-embed.md`「清单扩展：编排与特效」。
+
 ## 属性
 
 | 属性 | 默认 | 说明 |

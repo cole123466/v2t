@@ -54,6 +54,35 @@ public/pets/
 行尾空单元格会被跳过，播放只在非空帧内循环。若某个包的帧数不同，可以在
 pet.json 里加 `"frames": [6,8,8,4,5,8,6,6,6]` 覆盖。
 
+### 清单扩展：编排与特效（可选，运行时 ≥1.1.0）
+
+图集行语义是固定标准，但「动作怎么串成庆祝、配什么特效」可以在 pet.json 按角色
+覆盖，字段全部缺省即内置行为：
+
+```json
+{
+  "id": "saber",
+  "spritesheetPath": "spritesheet.webp",
+  "frames": [6, 8, 8, 4, 5, 8, 6, 6, 6],
+  "presets": {
+    "success": { "sequence": ["jumping", "jumping", "waving"], "fx": "success" },
+    "error": { "sequence": ["failed"], "fx": "error" },
+    "level-up": { "sequence": ["jumping", "waving"], "fx": "success" }
+  },
+  "fx": { "success": "#d9a441", "error": "#d95046" },
+  "anims": { "idle": { "fps": 5 } }
+}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `presets.<名>.sequence` | 动作行名数组，只收一次性动作（循环动作会被剔除）；过滤后为空则该条忽略 |
+| `presets.<名>.fx` | `success` / `error` / `none`；缺省沿用语义默认（success→金、error→红，其余无特效） |
+| `fx.<kind>` | 特效颜色，hex 或 `rgb()/rgba()`，注入 CSS 变量 `--pet-fx-<kind>`；非法值忽略 |
+| `anims.<行名>` | `fps`（1-60）与 `loop` 微调；`loop` 同时决定该动作能否被 pulse / sequence 编排 |
+
+宿主侧 `pet.pulse("<自定义语义名>")` 即可播放包里声明过的编排（如上例的 `level-up`）。
+
 ## 3. 元素属性
 
 | 属性 | 默认 | 说明 |
