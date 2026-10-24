@@ -1,10 +1,20 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Archive, ChevronRight, Download, FileText, Loader, RotateCcw, X } from "lucide-react";
+import {
+  Archive,
+  ChevronRight,
+  Download,
+  FileDown,
+  FileText,
+  Loader,
+  Printer,
+  RotateCcw,
+  X,
+} from "lucide-react";
 import type { MindMapNode } from "@/server/article";
 import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
-import { ArticleBlockView } from "./article-block";
+import { ArticleBlockView, InlineText } from "./article-block";
 import { RequestIdLine } from "./request-id";
 import { petFlow } from "@/components/pet/pet-flow";
 
@@ -79,7 +89,7 @@ export function ArticlePanel({
   const [detail, setDetail] = useState<ArticleDetailLevel>("standard");
   const [purpose, setPurpose] = useState("");
   const [citationTimes, setCitationTimes] = useState<Map<string, number>>(new Map());
-  const [exporting, setExporting] = useState<"md" | "zip" | null>(null);
+  const [exporting, setExporting] = useState<"md" | "zip" | "html" | null>(null);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
   const abortRef = useRef<AbortController | null>(null);
 
@@ -202,7 +212,23 @@ export function ArticlePanel({
     }
   };
 
-  const download = async (format: "md" | "zip") => {
+  // PDF 走「浏览器打印」：服务端出带打印样式的自包含 HTML，新窗口打开后唤起打印面板，
+  // 用户选「另存为 PDF」即得矢量文本、中文字体原生的 PDF（不引入 puppeteer/jsPDF）。
+  const exportPdf = () => {
+    if (!active || exporting) return;
+    const url = `/api/tasks/${active.id}/export?format=print`;
+    // 不能带 noopener 特性：那样 window.open 恒返回 null，无法区分「被拦截」。
+    // 打开后立刻切断 opener，效果等同 noopener。
+    const win = window.open(url, "_blank");
+    if (!win) {
+      setError("PDF 导出被浏览器拦截了新窗口，请允许弹出窗口后重试");
+      return;
+    }
+    win.opener = null;
+    win.focus();
+  };
+
+  const download = async (format: "md" | "zip" | "html") => {
     if (!active || exporting) return;
     setExporting(format);
     setError(null);
@@ -237,7 +263,31 @@ export function ArticlePanel({
             图文文章
           </p>
           {active?.content ? (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              <button
+                type="button"
+                onClick={exportPdf}
+                disabled={exporting !== null}
+                className="inline-flex items-center gap-1 rounded-lg border border-gold/40 bg-gold/10 px-2 py-1 font-mono text-[10px] text-gold transition-colors hover:bg-gold/20 disabled:opacity-50"
+                title="打开打印排版页，选择「另存为 PDF」"
+              >
+                <Printer className="size-3" strokeWidth={1.5} />
+                导出 PDF
+              </button>
+              <button
+                type="button"
+                onClick={() => void download("html")}
+                disabled={exporting !== null}
+                className="inline-flex items-center gap-1 font-mono text-[10px] text-paper-faint transition-colors hover:text-gold disabled:opacity-50"
+                title="下载自包含 HTML（图片已内联，可离线打开）"
+              >
+                {exporting === "html" ? (
+                  <Loader className="size-3 animate-spin" strokeWidth={1.5} />
+                ) : (
+                  <FileDown className="size-3" strokeWidth={1.5} />
+                )}
+                HTML
+              </button>
               <button
                 type="button"
                 onClick={() => void download("md")}
@@ -325,10 +375,12 @@ export function ArticlePanel({
 
       {active?.content ? (
         <div className="glass min-h-0 flex-1 overflow-auto rounded-2xl p-6">
-          <h2 className="font-display text-2xl font-semibold text-paper">
+          {/* 正文限宽：过宽的行长会让阅读跳行，正文区在宽屏下居中 */}
+          <div className="mx-auto w-full max-w-[44rem]">
+          <h2 className="font-display text-2xl font-semibold leading-snug text-paper">
             {active.content.title}
           </h2>
-          <p className="mt-1 font-mono text-[10px] tracking-wider text-paper-faint">
+          <p className="mt-1.5 font-mono text-[10px] tracking-wider text-paper-faint">
             {active.detailLevel === "concise" ? "速览" : active.detailLevel === "detailed" ? "深入" : "标准"}
             {" · "}
             {active.content.sections.length} 章
@@ -350,11 +402,20 @@ export function ArticlePanel({
             </div>
           ) : null}
 
-          <div className="mt-6 space-y-8">
-            {active.content.sections.map((section) => (
-              <section key={section.id} id={`section-${section.id}`} className="scroll-mt-4">
-                <h3 className="font-display text-lg font-semibold text-paper">{section.title}</h3>
-                <div className="mt-2 space-y-3">
+          <div className="mt-6 space-y-9">
+            {active.content.sections.map((section, index) => (
+              <section
+                key={section.id}
+                id={`section-${section.id}`}
+                className={`scroll-mt-4 ${index > 0 ? "border-t border-tint/[0.07] pt-8" : ""}`}
+              >
+                <h3 className="flex items-baseline gap-2.5 font-display text-[19px] font-semibold leading-snug text-paper">
+                  <span className="font-mono text-[11px] tracking-widest text-gold/80">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  {section.title}
+                </h3>
+                <div className="mt-3 space-y-3.5">
                   {section.blocks.map((block, i) => (
                     <ArticleBlockView
                       key={i}
@@ -370,15 +431,21 @@ export function ArticlePanel({
           </div>
 
           {active.content.limitations.length > 0 ? (
-            <div className="mt-8 rounded-xl border border-gold/20 bg-gold/5 p-4">
+            <div className="mt-9 rounded-xl border border-gold/20 bg-gold/5 p-4">
               <p className="font-mono text-[10px] tracking-widest text-gold/80">未确认之处</p>
-              <ul className="mt-2 space-y-1 text-xs leading-relaxed text-paper-dim">
+              <ul className="mt-2 space-y-1.5 text-[13px] leading-relaxed text-paper-dim">
                 {active.content.limitations.map((l, i) => (
-                  <li key={i}>· {l.text}</li>
+                  <li key={i} className="flex gap-2">
+                    <span className="text-gold/60">·</span>
+                    <span className="min-w-0">
+                      <InlineText text={l.text} times={citationTimes} onSeek={seek} />
+                    </span>
+                  </li>
                 ))}
               </ul>
             </div>
           ) : null}
+          </div>
         </div>
       ) : null}
 

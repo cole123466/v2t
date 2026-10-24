@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Transcript } from "@/server/asr";
+import { renderArticleHtml } from "@/server/article-html";
 import { buildCitationIndex, collectFrameIds, renderArticleMarkdown } from "@/server/export";
 import { readFrameManifest } from "@/server/frames";
 import { taskDir, transcriptPath } from "@/server/paths";
@@ -29,12 +30,20 @@ function safeName(title: string, ext: string): string {
   return base + ext;
 }
 
+type ExportFormat = "md" | "zip" | "html" | "print";
+
+function parseFormat(value: string | null): ExportFormat {
+  return value === "zip" || value === "html" || value === "print" ? value : "md";
+}
+
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string; articleId: string }> },
 ) {
   const { id, articleId } = await params;
-  const format = new URL(req.url).searchParams.get("format") === "zip" ? "zip" : "md";
+  // html / print：自包含 HTML（图片内联为 data URL）。
+  // print 额外带打印工具栏并在打开后唤起打印面板，供「另存为 PDF」。
+  const format = parseFormat(new URL(req.url).searchParams.get("format"));
   const rt = getRuntime();
   const task = rt.store.getOwned(id, deviceOwner(req));
   if (!task) return Response.json({ error: "任务不存在" }, { status: 404 });
@@ -89,6 +98,31 @@ export async function GET(
   });
 
   const title = record.title ?? article.title;
+  if (format === "html" || format === "print") {
+    const html = renderArticleHtml({
+      article,
+      detailLevel:
+        record.detailLevel === "concise" ? "速览" : record.detailLevel === "detailed" ? "深入" : "标准",
+      purpose: record.purpose,
+      model: record.model,
+      sourceUrl: task.sourceUrl ?? null,
+      publishedAt: record.createdAt,
+      citations,
+      images,
+      mode: format === "print" ? "print" : "document",
+    });
+    return new Response(html, {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        // html 是下载文件；print 直接内联展示，浏览器需要能就地打开
+        ...(format === "html"
+          ? { "content-disposition": attachment(safeName(title, ".html")) }
+          : {}),
+        "cache-control": "no-store",
+      },
+    });
+  }
+
   if (format === "md") {
     return new Response(md, {
       headers: {
