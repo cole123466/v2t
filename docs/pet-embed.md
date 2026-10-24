@@ -176,6 +176,7 @@ pet.resume();
 | `petFlow.importStart()` | 奔跑 |
 | `petFlow.importDone()` | 放大招 → 待机 |
 | `petFlow.importFailed()` | 失败动作 |
+| `petFlow.parsing()` | 奔跑（链接解析中） |
 | `petFlow.queued()` | 等待 |
 | `petFlow.working()` | 检查 / 处理姿态 |
 | `petFlow.done()` | 放大招 |

@@ -79,6 +79,8 @@ export const petFlow = {
   importStart: () => petSignal({ state: "running" }),
   importDone: () => petSignal({ state: "idle", pulse: "success" }),
   importFailed: () => petSignal({ state: "idle", pulse: "error" }),
+  /** 链接解析：与导入一样是“在跑”的短任务，播奔跑循环 */
+  parsing: () => petSignal({ state: "running" }),
   queued: () => petSignal({ state: "waiting" }),
   working: () => petSignal({ state: "working" }),
   done: () => petSignal({ state: "idle", pulse: "success" }),

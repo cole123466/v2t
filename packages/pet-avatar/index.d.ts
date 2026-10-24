@@ -98,6 +98,7 @@ export declare const petFlow: {
   importStart: () => void;
   importDone: () => void;
   importFailed: () => void;
+  parsing: () => void;
   queued: () => void;
   working: () => void;
   done: () => void;
