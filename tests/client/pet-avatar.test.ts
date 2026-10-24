@@ -171,6 +171,38 @@ beforeEach(() => {
   manifestPayload = BASE_MANIFEST;
 });
 
+describe("petFlow 业务语义 → 桌宠姿态", () => {
+  it("解析中切奔跑，其余阶段映射不变", async () => {
+    const signals: Array<{ state?: string; pulse?: string }> = [];
+    win.dispatchEvent = (ev: { detail: { state?: string; pulse?: string } }) => {
+      signals.push(ev.detail);
+      return true;
+    };
+    const { petFlow } = await import("../../packages/pet-avatar/index.js");
+
+    petFlow.parsing();
+    expect(signals.at(-1)).toEqual({ state: "running" });
+
+    const el = makePet(BASE_MANIFEST);
+    await flush();
+    await flush();
+    el.setState("running");
+    expect(el.getState()).toEqual({ base: "running", animation: "running", busy: false });
+
+    // 相邻阶段保持原样，避免误改
+    petFlow.queued();
+    expect(signals.at(-1)).toEqual({ state: "waiting" });
+    petFlow.importStart();
+    expect(signals.at(-1)).toEqual({ state: "running" });
+    petFlow.done();
+    expect(signals.at(-1)).toEqual({ state: "idle", pulse: "success" });
+    petFlow.failed();
+    expect(signals.at(-1)).toEqual({ state: "idle", pulse: "error" });
+    petFlow.idle();
+    expect(signals.at(-1)).toEqual({ state: "idle" });
+  });
+});
+
 describe("pet-avatar 清单编排", () => {
   it("未声明清单字段时保持内置默认：success 大招带特效，播完回基线", async () => {
     const el = makePet(BASE_MANIFEST);

@@ -190,6 +190,8 @@ export default function StudioPage() {
     setError(null);
     setLinkMeta(null);
     setLinkBusy(true);
+    // 解析是一次明确的“在跑”动作：先切奔跑，结束后收回待机
+    petFlow.parsing();
     try {
       const res = await fetch(`/api/source/probe?url=${encodeURIComponent(url)}`);
       const data = (await res.json().catch(() => null)) as
@@ -202,6 +204,7 @@ export default function StudioPage() {
       setLinkMeta(data.meta);
     } finally {
       setLinkBusy(false);
+      petFlow.idle();
     }
   }, [linkUrl, linkBusy]);
 
