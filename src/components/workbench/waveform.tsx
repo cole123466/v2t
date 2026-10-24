@@ -22,6 +22,15 @@ export function Waveform({
   useEffect(() => {
     let cancelled = false;
     let ctx: AudioContext | null = null;
+    // close 幂等：已关闭的 AudioContext 再次 close 会同步抛 InvalidStateError。
+    // cleanup、异步失败、StrictMode 重复挂载都可能重复触发，故统一走这里并置空。
+    const closeCtx = () => {
+      const current = ctx;
+      ctx = null;
+      if (current && current.state !== "closed") {
+        current.close().catch(() => {});
+      }
+    };
     peaksRef.current = null;
     (async () => {
       setStatus("loading");
@@ -30,7 +39,7 @@ export function Waveform({
       const raw = await res.arrayBuffer();
       ctx = new AudioContext();
       const audio = await ctx.decodeAudioData(raw);
-      await ctx.close();
+      closeCtx();
       if (cancelled) return;
 
       const data = audio.getChannelData(0);
@@ -50,12 +59,12 @@ export function Waveform({
       peaksRef.current = peaks;
       setStatus("ready");
     })().catch(() => {
-      void ctx?.close();
+      closeCtx();
       if (!cancelled) setStatus("error");
     });
     return () => {
       cancelled = true;
-      void ctx?.close();
+      closeCtx();
     };
   }, [audioSrc]);
 
