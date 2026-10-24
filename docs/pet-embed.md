@@ -70,7 +70,7 @@ pet.json 里加 `"frames": [6,8,8,4,5,8,6,6,6]` 覆盖。
     "level-up": { "sequence": ["jumping", "waving"], "fx": "success" }
   },
   "fx": { "success": "#d9a441", "error": "#d95046" },
-  "anims": { "idle": { "fps": 5 } }
+  "anims": { "idle": { "fps": 5 }, "review": { "rest": 3000 } }
 }
 ```
 
@@ -79,7 +79,12 @@ pet.json 里加 `"frames": [6,8,8,4,5,8,6,6,6]` 覆盖。
 | `presets.<名>.sequence` | 动作行名数组，只收一次性动作（循环动作会被剔除）；过滤后为空则该条忽略 |
 | `presets.<名>.fx` | `success` / `error` / `none`；缺省沿用语义默认（success→金、error→红，其余无特效） |
 | `fx.<kind>` | 特效颜色，hex 或 `rgb()/rgba()`，注入 CSS 变量 `--pet-fx-<kind>`；非法值忽略 |
-| `anims.<行名>` | `fps`（1-60）与 `loop` 微调；`loop` 同时决定该动作能否被 pulse / sequence 编排 |
+| `anims.<行名>` | `fps`（1-60）、`loop` 与 `rest`（0-20000ms）微调；`loop` 同时决定该动作能否被 pulse / sequence 编排 |
+
+`rest` 是**循环节之间的停顿**：一轮播完保持末帧不动那么久，再从头播。业务循环
+（`waiting` / `running` / `review`）内置 2400 / 2000 / 2200ms，所以任务跑起来
+桌宠是「动一下、停两秒」，不是一直动；`idle` 呼吸与拖拽用的 `running-left/right`
+默认不停顿，写 `rest: 0` 即恢复连续循环。
 
 宿主侧 `pet.pulse("<自定义语义名>")` 即可播放包里声明过的编排（如上例的 `level-up`）。
 
@@ -201,6 +206,7 @@ else petFlow.importFailed();
 ## 7. 交互
 
 - 光标移动 → 16 方向环视；指针静止 1.4s 后回到 idle 呼吸动画。
+- 等待 / 跑动 / 检查这类循环动作一轮播完会停 2s 左右再续（`anims.<行名>.rest` 可调）。
 - 单击 → 挥手；双击 → 跳跃；回车 / 空格 → 挥手。
 - 按住拖动 → 位置跟随并播放左右跑动，松手后写入 localStorage；位置始终钳制在视口内。
 - 拖拽基于 pointer capture：`pointercancel`、`lostpointercapture`、窗口失焦、

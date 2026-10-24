@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it } from "vitest";
  * 避免覆盖 vitest 自身的定时器。
  */
 
-type Timer = { fn: () => void };
+type Timer = { fn: () => void; delay: number };
 const timers = new Map<number, Timer>();
 let nextTimerId = 1;
 let manifestPayload: Record<string, unknown> = {};
@@ -83,9 +83,9 @@ class ElementStub {
 }
 
 const win: any = {
-  setTimeout(fn: () => void) {
+  setTimeout(fn: () => void, delay = 0) {
     const id = nextTimerId++;
-    timers.set(id, { fn });
+    timers.set(id, { fn, delay });
     return id;
   },
   clearTimeout(id: number) {
@@ -241,7 +241,7 @@ describe("pet-avatar 清单编排", () => {
     await flush();
 
     expect(el._animOf("idle").fps).toBe(3);
-    expect(el._animOf("waving")).toEqual({ row: 3, fps: 9, loop: true });
+    expect(el._animOf("waving")).toEqual({ row: 3, fps: 9, loop: true, rest: 0 });
     expect(el.pulse("waving")).toBe(false); // 变成循环动作后不可 pulse
     el.sequence(["waving", "jumping"]);
     expect(el._queue).toEqual([]); // waving 被剔除
@@ -266,5 +266,40 @@ describe("pet-avatar 清单编排", () => {
     expect(el.pulse("level-up")).toBe(true);
     runOut(el);
     expect(el.getState()).toEqual({ base: "working", animation: "review", busy: false });
+  });
+
+  it("业务循环一轮播完留停顿，待机呼吸与拖拽跑动不停", async () => {
+    const el = makePet(BASE_MANIFEST);
+    await flush();
+    await flush();
+
+    // 业务状态默认停顿；待机呼吸、拖拽跑动保持连续
+    expect(el._animOf("review").rest).toBe(2200);
+    expect(el._animOf("running").rest).toBe(2000);
+    expect(el._animOf("waiting").rest).toBe(2400);
+    expect(el._animOf("idle").rest).toBe(0);
+    expect(el._animOf("running-right").rest).toBe(0);
+
+    el.setState("working");
+    for (let i = 0; i < el._frames[8]; i += 1) el._step(); // 播完一整轮
+    expect(el._frame).toBe(0);
+    expect(timers.get(el._timer)?.delay).toBe(2200); // 末帧停住，等停顿结束再续
+
+    el._step(); // 停顿结束后照常逐帧推进
+    expect(timers.get(el._timer)?.delay).toBeCloseTo(1000 / 6);
+
+    // 清单可调：0 表示不停顿，越界回退内置值
+    const el2 = makePet({ ...BASE_MANIFEST, anims: { review: { rest: 0 } } });
+    await flush();
+    await flush();
+    expect(el2._animOf("review").rest).toBe(0);
+    el2.setState("working");
+    for (let i = 0; i < el2._frames[8]; i += 1) el2._step();
+    expect(timers.get(el2._timer)?.delay).toBeCloseTo(1000 / 6);
+
+    const el3 = makePet({ ...BASE_MANIFEST, anims: { review: { rest: 99999 } } });
+    await flush();
+    await flush();
+    expect(el3._animOf("review").rest).toBe(2200);
   });
 });

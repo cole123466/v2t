@@ -15,16 +15,18 @@
 
   var ATLAS = { cols: 8, cellW: 192, cellH: 208, lookRowA: 9, lookRowB: 10, lookCount: 16 };
   var DEFAULT_FRAMES = [6, 8, 8, 4, 5, 8, 6, 6, 6];
+  // rest：循环节之间的停顿（毫秒），一轮播完保持末帧不动，避免“一直在动”的观感。
+  // 业务状态（等待 / 跑动 / 检查）默认停 2s 上下；待机呼吸与拖拽跑动不停。
   var ANIM = {
-    idle:            { row: 0, fps: 6,  loop: true  },
-    "running-right": { row: 1, fps: 11, loop: true  },
-    "running-left":  { row: 2, fps: 11, loop: true  },
-    waving:          { row: 3, fps: 9,  loop: false },
-    jumping:         { row: 4, fps: 12, loop: false },
-    failed:          { row: 5, fps: 8,  loop: false },
-    waiting:         { row: 6, fps: 5,  loop: true  },
-    running:         { row: 7, fps: 10, loop: true  },
-    review:          { row: 8, fps: 6,  loop: true  }
+    idle:            { row: 0, fps: 6,  loop: true,  rest: 0    },
+    "running-right": { row: 1, fps: 11, loop: true,  rest: 0    },
+    "running-left":  { row: 2, fps: 11, loop: true,  rest: 0    },
+    waving:          { row: 3, fps: 9,  loop: false, rest: 0    },
+    jumping:         { row: 4, fps: 12, loop: false, rest: 0    },
+    failed:          { row: 5, fps: 8,  loop: false, rest: 0    },
+    waiting:         { row: 6, fps: 5,  loop: true,  rest: 2400 },
+    running:         { row: 7, fps: 10, loop: true,  rest: 2000 },
+    review:          { row: 8, fps: 6,  loop: true,  rest: 2200 }
   };
   // 宿主常用的“持久状态” → 图集动作行（working 借用 review 的检查姿态）
   var BASE_ANIM = { idle: "idle", running: "running", waiting: "waiting", working: "review" };
@@ -424,7 +426,7 @@
 
   /**
    * 清单可选声明覆盖内置编排，全部缺省即旧行为（向后兼容）：
-   *   anims   — 动作行 fps/loop 微调，如 { "idle": { "fps": 5 } }
+   *   anims   — 动作行 fps/loop/rest 微调，如 { "review": { "rest": 3000 } }
    *   presets — 语义动作编排，如 { "success": { "sequence": ["jumping","waving"], "fx": "success" } }
    *   fx      — 特效颜色，如 { "success": "#d9a441" }
    * sequence 只收一次性动作；fx 只认 success / error / none，未声明沿用语义默认。
@@ -441,10 +443,12 @@
         entry = raw[name];
         if (!entry || typeof entry !== "object") continue;
         var fps = parseFloat(entry.fps);
+        var rest = parseFloat(entry.rest);
         overrides = overrides || {};
         overrides[name] = {
           fps: isFinite(fps) && fps >= 1 && fps <= 60 ? fps : null,
-          loop: typeof entry.loop === "boolean" ? entry.loop : null
+          loop: typeof entry.loop === "boolean" ? entry.loop : null,
+          rest: isFinite(rest) && rest >= 0 && rest <= 20000 ? rest : null
         };
       }
     }
@@ -499,7 +503,8 @@
     return {
       row: base.row,
       fps: typeof over.fps === "number" ? over.fps : base.fps,
-      loop: typeof over.loop === "boolean" ? over.loop : base.loop
+      loop: typeof over.loop === "boolean" ? over.loop : base.loop,
+      rest: typeof over.rest === "number" ? over.rest : base.rest
     };
   };
 
@@ -645,7 +650,8 @@
     if (this._frame >= total) {
       if (anim.loop) {
         this._frame = 0;
-        this._schedule(1000 / anim.fps);
+        // 循环节之间留停顿：末帧多停一会儿，别让桌宠一直在动
+        this._schedule(anim.rest > 0 ? anim.rest : 1000 / anim.fps);
       } else {
         // 末帧先完整显示一拍，再切下一段，避免最后一帧被瞬间跳过
         this._pendingAdvance = true;
@@ -886,7 +892,7 @@
   window.customElements.define("pet-avatar", PetAvatar);
 
   window.PetAvatar = {
-    version: "1.1.0",
+    version: "1.2.0",
     elementName: "pet-avatar",
     atlas: ATLAS,
     baseStates: BASE_ANIM,
