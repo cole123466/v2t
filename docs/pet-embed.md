@@ -204,6 +204,45 @@ else petFlow.importFailed();
 | 任务页状态跃迁 | `queued` / `working` / `done` / `failed` |
 | 文案生成 | `working` → `done` / `failed` |
 
+### akiha 的红发状态怎么触发
+
+红发**不是独立的状态键**，而是 akiha 图集里 `running` 动作行（第 7 行）的帧：
+其余行（`idle` 行 0、`waiting` 行 6、`review` 行 8 等）都是黑发。所以"触发红发"
+等价于"让桌宠进入 `running` 持久状态"。
+
+完整链路：
+
+```
+petFlow.importStart() / petFlow.parsing()
+  → window 派发 v2t:pet-signal { state: "running" }
+  → PetLayer 的监听器调用 element.setState("running")
+  → BASE_ANIM.running = "running" → ANIM.running.row = 7
+  → 画布逐帧绘制第 7 行（红发）
+```
+
+能触发红发的入口：
+
+| 入口 | 用户操作 | 何时变回黑发 |
+| --- | --- | --- |
+| `petFlow.parsing()` | 工作台粘贴链接后点「解析」 | 解析结束（成功或失败）时 `petFlow.idle()` |
+| `petFlow.importStart()` | 工作台上传文件，或「创建链接任务」提交期间 | 创建成功后 `importDone()` / 失败后 `importFailed()` |
+| 直接调用 | `petSignal({ state: "running" })` 或 `document.querySelector("pet-avatar").setState("running")` | 下一次 `setState` 非 `running` |
+
+复现步骤（本仓库）：在桌宠设置里选中 **Akiha Tohno**，进入 `/studio`，
+粘贴一个链接点「解析」（或拖入文件上传），解析期间桌宠即切到红发；请求结束
+回到黑发的待机状态。
+
+注意两点：
+
+- 任务页 `/task/<id>` 的 `downloading` / `transcribing` 等状态走的是
+  `petFlow.working()` → `review` 行（行 8），**仍是黑发**；真正播红发的是
+  `running` 行。`pet.json` 里 "hair turns crimson while working and thinking"
+  的描述只对应这张图集的美术，不对应 `working` 状态。
+- 红发这一轮按 6 帧 @10fps 循环，轮间停 2000ms（`ANIM.running.rest`）；
+  需要更长 / 更短可在该包 `pet.json` 用 `"anims": { "running": { "rest": 0 } }` 覆盖。
+- 角色素材不入库（`public/pets/*/` 被 `.gitignore` 忽略），本机需已有
+  `public/pets/akiha-tohno/` 才能在选择面板里选到 akiha。
+
 ## 7. 交互
 
 - 光标移动 → 16 方向环视；指针静止 1.4s 后回到 idle 呼吸动画。
