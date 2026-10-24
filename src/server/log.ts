@@ -72,10 +72,28 @@ export function logError(message: string, fields: LogFields = {}): void {
 /** 错误对象转日志字段：默认只留 message；排查堆栈时设 LOG_STACK=1 */
 export function errorFields(error: unknown): LogFields {
   const message = error instanceof Error ? error.message : String(error);
+  const cause = causeFields(error);
   if (process.env.LOG_STACK === "1" && error instanceof Error && error.stack) {
-    return { error: message, stack: error.stack };
+    return cause ? { error: message, cause, stack: error.stack } : { error: message, stack: error.stack };
   }
-  return { error: message };
+  return cause ? { error: message, cause } : { error: message };
+}
+
+/**
+ * 取 error.cause 链上的 code/message。
+ * fetch 失败时 undici 只抛 TypeError("fetch failed")，真正原因（ECONNRESET、
+ * ETIMEDOUT、证书错误…）全在 cause 里，不记下来就没法排查网络问题。
+ */
+function causeFields(error: unknown): string | undefined {
+  const parts: string[] = [];
+  let current = (error as { cause?: unknown } | undefined)?.cause;
+  for (let depth = 0; current && depth < 3; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    const message = current instanceof Error ? current.message : String(current);
+    parts.push(typeof code === "string" && code ? code + ": " + message : message);
+    current = (current as { cause?: unknown }).cause;
+  }
+  return parts.length > 0 ? parts.join(" <- ") : undefined;
 }
 
 export function elapsedMs(startedAt: number): number {

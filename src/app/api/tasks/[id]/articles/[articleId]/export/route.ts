@@ -5,6 +5,8 @@ import { buildCitationIndex, collectFrameIds, renderArticleMarkdown } from "@/se
 import { readFrameManifest } from "@/server/frames";
 import { taskDir, transcriptPath } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
+import { deviceOwner } from "@/server/owner";
+
 import { createZip } from "@/server/zip";
 
 export const runtime = "nodejs";
@@ -34,7 +36,7 @@ export async function GET(
   const { id, articleId } = await params;
   const format = new URL(req.url).searchParams.get("format") === "zip" ? "zip" : "md";
   const rt = getRuntime();
-  const task = rt.store.get(id);
+  const task = rt.store.getOwned(id, deviceOwner(req));
   if (!task) return Response.json({ error: "任务不存在" }, { status: 404 });
   const record = rt.articles.get(articleId);
   if (!record || record.taskId !== id) return Response.json({ error: "文章不存在" }, { status: 404 });

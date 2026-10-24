@@ -80,6 +80,8 @@ const COLUMNS: Array<{ table: string; column: string; ddl: string }> = [
   { table: "tasks", column: "transcript_origin", ddl: "TEXT" },
   { table: "tasks", column: "download_pct", ddl: "INTEGER" },
   { table: "tasks", column: "source_notice", ddl: "TEXT" },
+  // 设备归属：空串是加隔离之前的历史任务
+  { table: "tasks", column: "owner", ddl: "TEXT NOT NULL DEFAULT ''" },
 ];
 
 export function openDb(file: string): Db {

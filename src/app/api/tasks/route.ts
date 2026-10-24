@@ -10,6 +10,7 @@ import { QUEUE_FULL_CODE, QueueFullError, queueFullMessage } from "@/server/runn
 import { getRuntime } from "@/server/runtime";
 import { logInfo, logWarn } from "@/server/log";
 import { requestId } from "@/server/request";
+import { deviceOwner } from "@/server/owner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,7 +49,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const task = store.create({ originalName, ext, sizeBytes });
+  const task = store.create({ originalName, ext, sizeBytes, owner: deviceOwner(req) });
   const dir = taskDir(dataDir, task.id);
   const dest = sourcePath(dir, ext);
 
@@ -109,7 +110,11 @@ export async function POST(req: Request) {
   return Response.json(task, { status: 201 });
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const { store } = getRuntime();
-  return Response.json({ tasks: store.list() });
+  const owner = deviceOwner(req);
+  // 升级后第一次有设备来取列表：把无主的历史任务认领给它，免得老任务凭空消失。
+  // 之后 owner 已全部有值，这条 UPDATE 命中 0 行。
+  store.claimLegacy(owner);
+  return Response.json({ tasks: store.list(owner) });
 }

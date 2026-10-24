@@ -15,6 +15,13 @@ export function getRetentionDays(): number {
   return Number.isFinite(days) && days > 0 ? days : 7;
 }
 
+/** ASR 分段秒数：越小单请求越快，边界切句越多；默认 600（10 分钟） */
+export function getAsrChunkSeconds(): number {
+  const raw = Number(process.env.ASR_CHUNK_SECONDS ?? "");
+  if (!Number.isFinite(raw) || raw <= 0) return 600;
+  return Math.min(Math.max(Math.round(raw), 60), 3000);
+}
+
 export function getSiliconFlowConfig(): { apiKey: string; baseUrl: string; model: string } {
   return {
     apiKey: process.env.SILICONFLOW_API_KEY ?? "",

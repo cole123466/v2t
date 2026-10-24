@@ -122,20 +122,32 @@ describe("队列容量（排队上限 3）", () => {
 });
 
 describe("GET /api/queue", () => {
-  it("返回队列快照的 JSON", async () => {
+  it("返回队列快照，并把设备 ID 透传给 runner（别人的任务不出现）", async () => {
     vi.resetModules();
     const snapshot = {
       active: [],
       queued: [],
       queuedLimit: DEFAULT_QUEUE_LIMIT,
     };
+    const owners: Array<string | undefined> = [];
     vi.doMock("@/server/runtime", () => ({
-      getRuntime: () => ({ runner: { getQueueSnapshot: () => snapshot } }),
+      getRuntime: () => ({
+        runner: {
+          getQueueSnapshot: (owner?: string) => {
+            owners.push(owner);
+            return snapshot;
+          },
+        },
+      }),
     }));
     const { GET } = await import("@/app/api/queue/route");
-    const response = await GET();
+    const device = "11111111-2222-4333-8444-555555555555";
+    const response = await GET(
+      new Request("http://localhost/api/queue", { headers: { cookie: `v2t-device=${device}` } }),
+    );
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(snapshot);
+    expect(owners).toEqual([device]);
     vi.doUnmock("@/server/runtime");
   });
 });

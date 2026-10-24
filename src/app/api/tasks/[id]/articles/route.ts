@@ -8,16 +8,18 @@ import { getRuntime } from "@/server/runtime";
 import type { ArticleDetailLevel } from "@/server/articles";
 import { errorFields, logError } from "@/server/log";
 import { requestId } from "@/server/request";
+import { deviceOwner } from "@/server/owner";
+
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const DETAIL_LEVELS: ArticleDetailLevel[] = ["concise", "standard", "detailed"];
 
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { store, articles } = getRuntime();
-  if (!store.get(id)) return Response.json({ error: "任务不存在" }, { status: 404 });
+  if (!store.getOwned(id, deviceOwner(req))) return Response.json({ error: "任务不存在" }, { status: 404 });
   return Response.json({ articles: articles.listForTask(id) });
 }
 
@@ -25,7 +27,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const { id } = await params;
   const traceId = requestId(req);
   const rt = getRuntime();
-  const task = rt.store.get(id);
+  const task = rt.store.getOwned(id, deviceOwner(req));
   if (!task) return Response.json({ error: "任务不存在" }, { status: 404 });
   if (task.status !== "ready") {
     return Response.json({ error: "任务尚未转写完成" }, { status: 409 });

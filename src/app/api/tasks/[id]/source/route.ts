@@ -3,6 +3,8 @@ import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { sourcePath, taskDir } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
+import { deviceOwner } from "@/server/owner";
+
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,7 +29,7 @@ export async function GET(
 ) {
   const { id } = await params;
   const { store, dataDir } = getRuntime();
-  const task = store.get(id);
+  const task = store.getOwned(id, deviceOwner(req));
   if (!task) return new Response("task not found", { status: 404 });
 
   const file = sourcePath(taskDir(dataDir, id), task.ext);

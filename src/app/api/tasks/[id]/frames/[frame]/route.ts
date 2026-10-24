@@ -3,6 +3,8 @@ import path from "node:path";
 import { framesDir, readFrameManifest } from "@/server/frames";
 import { taskDir } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
+import { deviceOwner } from "@/server/owner";
+
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,12 +14,12 @@ export const dynamic = "force-dynamic";
  * 媒体被清理后返回 410，前端据此退化为无图阅读。
  */
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string; frame: string }> },
 ) {
   const { id, frame } = await params;
   const rt = getRuntime();
-  if (!rt.store.get(id)) return new Response("task not found", { status: 404 });
+  if (!rt.store.getOwned(id, deviceOwner(req))) return new Response("task not found", { status: 404 });
 
   const dir = taskDir(rt.dataDir, id);
   const manifest = await readFrameManifest(dir);

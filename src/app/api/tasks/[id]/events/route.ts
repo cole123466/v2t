@@ -1,4 +1,6 @@
 import { getRuntime } from "@/server/runtime";
+import { deviceOwner } from "@/server/owner";
+
 import type { Task } from "@/server/tasks";
 
 export const runtime = "nodejs";
@@ -10,7 +12,7 @@ export async function GET(
 ) {
   const { id } = await params;
   const { store, runner } = getRuntime();
-  const task = store.get(id);
+  const task = store.getOwned(id, deviceOwner(req));
   if (!task) {
     return new Response("task not found", { status: 404 });
   }

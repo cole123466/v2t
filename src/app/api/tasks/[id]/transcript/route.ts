@@ -1,17 +1,19 @@
 import { readFile } from "node:fs/promises";
 import { getRuntime } from "@/server/runtime";
+import { deviceOwner } from "@/server/owner";
+
 import { taskDir, transcriptPath } from "@/server/paths";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
   const { store, dataDir } = getRuntime();
-  const task = store.get(id);
+  const task = store.getOwned(id, deviceOwner(req));
   if (!task) {
     return Response.json({ error: "任务不存在" }, { status: 404 });
   }

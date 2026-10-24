@@ -4,6 +4,8 @@ import type { FrameManifest } from "@/server/frames";
 import { taskDir, transcriptPath } from "@/server/paths";
 import { readFrameManifest } from "@/server/frames";
 import { getRuntime } from "@/server/runtime";
+import { deviceOwner } from "@/server/owner";
+
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,10 +14,10 @@ export const dynamic = "force-dynamic";
  * 引用目录：供前端把 [[tNN]] / [[fNN]] 渲染成可点击芯片并跳转。
  * 只暴露编号与时间点，不回传全文（转写稿走独立端点）。
  */
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const rt = getRuntime();
-  const task = rt.store.get(id);
+  const task = rt.store.getOwned(id, deviceOwner(req));
   if (!task) return Response.json({ error: "任务不存在" }, { status: 404 });
 
   const dir = taskDir(rt.dataDir, id);

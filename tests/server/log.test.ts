@@ -38,6 +38,19 @@ describe("日志格式", () => {
     expect(errorFields("plain")).toEqual({ error: "plain" });
   });
 
+  it("fetch 失败时把 cause 链上的真实原因一起记下来", () => {
+    const cause = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+    const wrapped = Object.assign(new TypeError("fetch failed"), { cause });
+    expect(errorFields(wrapped)).toEqual({
+      error: "fetch failed",
+      cause: "ECONNRESET: read ECONNRESET",
+    });
+    expect(errorFields(Object.assign(new TypeError("fetch failed"), { cause: "timeout" }))).toEqual({
+      error: "fetch failed",
+      cause: "timeout",
+    });
+  });
+
   it("LOG_STACK=1 时附带堆栈", () => {
     process.env.LOG_STACK = "1";
     const fields = errorFields(new Error("boom"));

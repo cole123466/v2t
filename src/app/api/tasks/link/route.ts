@@ -5,6 +5,7 @@ import { getRuntime } from "@/server/runtime";
 import { isSupportedLink } from "@/server/source";
 import { errorFields, logInfo, logWarn } from "@/server/log";
 import { requestId } from "@/server/request";
+import { deviceOwner } from "@/server/owner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,6 +53,7 @@ export async function POST(req: Request) {
 
   const task = store.create({
     originalName: meta.title,
+    owner: deviceOwner(req),
     // 实际扩展名在下载完成后由下载器回填
     ext: ".mp4",
     sizeBytes: 0,

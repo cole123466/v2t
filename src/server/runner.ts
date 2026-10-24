@@ -21,7 +21,7 @@ export interface RunnerOptions {
   asr: ASRProvider;
   /** 链接任务的下载器；上传任务不用 */
   source?: SourceProvider;
-  /** 超过该秒数即分段转写；默认 50 分钟（ASR 提供方 ≤1h 且 ≤50MB 的硬限制倒推） */
+  /** 超过该秒数即分段转写；默认 10 分钟（见 DEFAULT_CHUNK_SECONDS） */
   chunkSeconds?: number;
   /** 全景帧张数，默认 12 */
   overviewFrames?: number;
@@ -29,7 +29,12 @@ export interface RunnerOptions {
   queueLimit?: number;
 }
 
-const DEFAULT_CHUNK_SECONDS = 50 * 60;
+/**
+ * 默认 10 分钟一段。提供方的硬限制是 ≤1h / ≤50MB，但单次请求实际会被网关在
+ * 120s 上下掐断：整段 43 分钟（15MB）曾停在 125s 报 fetch failed，而 11 分钟
+ * （3.4MB）稳定 60-70s 返回。所以按「单请求能在超时窗口内跑完」来分段。
+ */
+const DEFAULT_CHUNK_SECONDS = 10 * 60;
 const DEFAULT_OVERVIEW_FRAMES = 12;
 
 /** 排队任务上限：串行管线同一时刻只处理 1 个，最多再排 3 个等待 */
@@ -77,12 +82,15 @@ export class TaskRunner {
     return this.opts.queueLimit ?? DEFAULT_QUEUE_LIMIT;
   }
 
-  /** 当前队列快照（只读）：active 是处理中的任务，queued 按入队顺序 */
-  getQueueSnapshot(): QueueSnapshot {
-    const active = this.activeId ? this.opts.store.get(this.activeId) : undefined;
-    const queued = this.queue
-      .map((id) => this.opts.store.get(id))
-      .filter((task): task is Task => task !== undefined);
+  /**
+   * 当前队列快照（只读）：active 是处理中的任务，queued 按入队顺序。
+   * owner 缺省返回全部（内部用途）；接口层传设备 ID，别把别人的任务名漏出去。
+   */
+  getQueueSnapshot(owner?: string): QueueSnapshot {
+    const pick = (id: string) =>
+      owner === undefined ? this.opts.store.get(id) : this.opts.store.getOwned(id, owner);
+    const active = this.activeId ? pick(this.activeId) : undefined;
+    const queued = this.queue.map(pick).filter((task): task is Task => task !== undefined);
     return {
       active: active ? [active] : [],
       queued,

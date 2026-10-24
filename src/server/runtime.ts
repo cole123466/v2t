@@ -3,7 +3,7 @@ import path from "node:path";
 import { ActivityStore } from "./activities";
 import { ArticleService, ArticleStore } from "./articles";
 import { createSiliconFlowAsr } from "./asr";
-import { getDataDir, getRetentionDays } from "./config";
+import { getAsrChunkSeconds, getDataDir, getRetentionDays } from "./config";
 import { openDb, type Db } from "./db";
 import { GenerationService, GenerationStore } from "./generations";
 import { createOpenAiCompatibleLlm } from "./llm";
@@ -44,7 +44,13 @@ export function getRuntime(): Runtime {
     const db = openDb(path.join(dataDir, "v2t.db"));
     const store = new TaskStore(db);
     const source = createYtDlpProvider();
-    const runner = new TaskRunner({ store, dataDir, asr: createSiliconFlowAsr(), source });
+    const runner = new TaskRunner({
+      store,
+      dataDir,
+      asr: createSiliconFlowAsr(),
+      source,
+      chunkSeconds: getAsrChunkSeconds(),
+    });
     const generations = new GenerationStore(db);
     const llm = createOpenAiCompatibleLlm();
     const generationService = new GenerationService({ store: generations, llm });

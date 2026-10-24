@@ -4,17 +4,19 @@ import { getRuntime } from "@/server/runtime";
 import { PRESET_TEMPLATES, type GenerationInput } from "@/server/generations";
 import type { Transcript } from "@/server/asr";
 import { requestId } from "@/server/request";
+import { deviceOwner } from "@/server/owner";
+
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
   const { store, generations } = getRuntime();
-  if (!store.get(id)) {
+  if (!store.getOwned(id, deviceOwner(req))) {
     return Response.json({ error: "任务不存在" }, { status: 404 });
   }
   return Response.json({ generations: generations.listForTask(id) });
@@ -27,7 +29,7 @@ export async function POST(
   const { id } = await params;
   const traceId = requestId(req);
   const { store, generationService, dataDir } = getRuntime();
-  const task = store.get(id);
+  const task = store.getOwned(id, deviceOwner(req));
   if (!task) return Response.json({ error: "任务不存在" }, { status: 404 });
   if (task.status !== "ready") {
     return Response.json({ error: "任务尚未转写完成" }, { status: 409 });

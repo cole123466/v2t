@@ -49,7 +49,7 @@ beforeEach(() => {
 describe("SSE 错误事件携带 request_id", () => {
   it("文案生成失败", async () => {
     mocks.getRuntime.mockReturnValue({
-      store: { get: () => ({ id: "task-1", status: "ready" }) },
+      store: { getOwned: () => ({ id: "task-1", status: "ready" }) },
       dataDir: "/tmp/v2t-test",
       generationService: {
         generateForTask: async () => {
@@ -73,7 +73,7 @@ describe("SSE 错误事件携带 request_id", () => {
 
   it("问答失败", async () => {
     mocks.getRuntime.mockReturnValue({
-      store: { get: () => ({ id: "task-1", status: "ready" }) },
+      store: { getOwned: () => ({ id: "task-1", status: "ready" }) },
       dataDir: "/tmp/v2t-test",
       activities: activities(),
       qaService: {
@@ -98,7 +98,7 @@ describe("SSE 错误事件携带 request_id", () => {
 
   it("图文文章失败", async () => {
     mocks.getRuntime.mockReturnValue({
-      store: { get: () => ({ id: "task-1", status: "ready", mediaPurgedAt: null }) },
+      store: { getOwned: () => ({ id: "task-1", status: "ready", mediaPurgedAt: null }) },
       dataDir: "/tmp/v2t-test",
       activities: activities(),
       articleService: {

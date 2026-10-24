@@ -1,16 +1,18 @@
 import { isProcessing } from "@/lib/task-status";
 import { deleteTask } from "@/server/maintenance";
 import { getRuntime } from "@/server/runtime";
+import { deviceOwner } from "@/server/owner";
+
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const task = getRuntime().store.get(id);
+  const task = getRuntime().store.getOwned(id, deviceOwner(req));
   if (!task) {
     return Response.json({ error: "任务不存在" }, { status: 404 });
   }
@@ -18,12 +20,12 @@ export async function GET(
 }
 
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
   const rt = getRuntime();
-  const task = rt.store.get(id);
+  const task = rt.store.getOwned(id, deviceOwner(req));
   if (!task) {
     return Response.json({ error: "任务不存在" }, { status: 404 });
   }
