@@ -114,7 +114,7 @@ function ArticleFrame({
           onError={() => setFailed(true)}
         />
       </button>
-      <figcaption className="flex items-start justify-between gap-3 px-3 py-1.5 font-mono text-[10px] tracking-wider text-paper-faint">
+      <figcaption className="flex items-start justify-between gap-3 px-3.5 py-2 text-[11px] leading-relaxed text-paper-faint">
         <span className="min-w-0 flex-1 text-paper-dim">
           {caption ? <InlineText text={caption} times={times} onSeek={onSeek} /> : frameId.toUpperCase()}
         </span>
@@ -137,14 +137,15 @@ export function ArticleBlockView({
 }) {
   switch (block.type) {
     case "paragraph":
+      // 中文正文：稍大的字号 + 更松的行距 + 两端对齐，避免长段落"糊成一团"
       return (
-        <p className="text-sm leading-relaxed text-paper-dim">
+        <p className="text-[15px] leading-[1.9] text-paper-dim [text-align:justify] [text-justify:inter-ideograph]">
           <InlineText text={block.text} times={times} onSeek={onSeek} />
         </p>
       );
     case "quote":
       return (
-        <blockquote className="border-l-2 border-gold/40 pl-3 text-sm italic leading-relaxed text-paper-dim">
+        <blockquote className="rounded-r-xl border-l-2 border-gold/50 bg-tint/[0.03] px-4 py-3 text-[14px] leading-[1.85] text-paper-dim">
           <InlineText text={block.text} times={times} onSeek={onSeek} />
         </blockquote>
       );
@@ -152,7 +153,7 @@ export function ArticleBlockView({
       const List = block.ordered ? "ol" : "ul";
       return (
         <List
-          className={`space-y-1 pl-5 text-sm leading-relaxed text-paper-dim ${
+          className={`space-y-1.5 pl-5 text-[15px] leading-[1.85] text-paper-dim marker:text-gold/70 ${
             block.ordered ? "list-decimal" : "list-disc"
           }`}
         >
@@ -172,7 +173,7 @@ export function ArticleBlockView({
               {block.lang}
             </p>
           ) : null}
-          <pre className="overflow-x-auto p-3 font-mono text-[11px] leading-relaxed text-paper-dim">
+          <pre className="overflow-x-auto p-3.5 font-mono text-[12px] leading-[1.75] text-paper-dim">
             <code>{block.text}</code>
           </pre>
         </div>
@@ -181,11 +182,11 @@ export function ArticleBlockView({
       return (
         <figure className="overflow-hidden rounded-xl border border-tint/10">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-max border-collapse text-left text-xs">
+            <table className="w-full min-w-max border-collapse text-left text-[13px]">
               <thead className="bg-tint/5 text-paper">
                 <tr>
                   {block.header.map((cell, i) => (
-                    <th key={i} className="px-3 py-2 font-medium">
+                    <th key={i} className="whitespace-nowrap px-3.5 py-2.5 font-medium">
                       <InlineText text={cell} times={times} onSeek={onSeek} />
                     </th>
                   ))}
@@ -195,7 +196,7 @@ export function ArticleBlockView({
                 {block.rows.map((row, ri) => (
                   <tr key={ri} className="border-t border-tint/5 odd:bg-tint/[0.02]">
                     {row.map((cell, ci) => (
-                      <td key={ci} className="px-3 py-2 align-top">
+                      <td key={ci} className="px-3.5 py-2.5 align-top leading-[1.7]">
                         <InlineText text={cell} times={times} onSeek={onSeek} />
                       </td>
                     ))}
@@ -205,7 +206,7 @@ export function ArticleBlockView({
             </table>
           </div>
           {block.caption ? (
-            <figcaption className="border-t border-tint/5 px-3 py-1.5 text-[10px] text-paper-faint">
+            <figcaption className="border-t border-tint/5 px-3.5 py-2 text-[11px] leading-relaxed text-paper-faint">
               <InlineText text={block.caption} times={times} onSeek={onSeek} />
             </figcaption>
           ) : null}
