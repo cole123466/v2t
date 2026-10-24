@@ -59,11 +59,12 @@ export function getRuntime(): Runtime {
       to: RUNTIME_VERSION,
     });
     // 旧 SQLite 连接与定时器需要显式释放：新实例会重新打开同一 DB 文件
-    cached.runtime.db.close();
+    // 先停定时器再关连接，避免 purge 回调访问已关闭的数据库
     if (globalForV2t.__v2tPurgeTimer) {
       clearInterval(globalForV2t.__v2tPurgeTimer);
       globalForV2t.__v2tPurgeTimer = undefined;
     }
+    cached.runtime.db.close();
     globalForV2t.__v2tRuntime = undefined;
   }
   if (!globalForV2t.__v2tRuntime) {
