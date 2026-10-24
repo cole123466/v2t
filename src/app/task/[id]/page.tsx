@@ -32,6 +32,7 @@ import { SourceNotice } from "@/components/workbench/source-notice";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { PetToggle } from "@/components/pet/pet-toggle";
 import { clock } from "@/lib/time";
+import { failureHint } from "@/lib/failure-hint";
 
 const STAGES = [
   { key: "scope", label: "获取来源", icon: Upload },
@@ -213,6 +214,7 @@ export default function TaskPage() {
   const notice = <SourceNotice text={task.sourceNotice} />;
 
   if (task.status === "failed") {
+    const { hint } = failureHint(task.error);
     return (
       <main className="mx-auto w-full max-w-3xl px-6 pb-16">
         {header}
@@ -223,7 +225,7 @@ export default function TaskPage() {
           <p className="break-all font-mono text-xs leading-relaxed text-danger/80">
             {task.error ?? "未知错误"}
           </p>
-          <p className="text-xs text-paper-faint">请检查文件是否可播放后，重新上传。</p>
+          <p className="text-xs leading-relaxed text-paper-faint">{hint}</p>
         </section>
       </main>
     );
