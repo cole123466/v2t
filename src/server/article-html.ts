@@ -19,8 +19,6 @@ import { clock, type ExportCitation } from "./export";
  * 所有正文都来自模型输出，拼接前一律转义；本模块不向 HTML 输出任何原始标签。
  */
 
-export type ArticleHtmlMode = "document" | "print";
-
 export interface ArticleHtmlInput {
   article: Article;
   detailLevel: string;
@@ -32,8 +30,6 @@ export interface ArticleHtmlInput {
   citations: Map<string, ExportCitation>;
   /** frameId → data URL；缺失时渲染占位而不是破图 */
   images: Map<string, string>;
-  /** print：带「打印 / 另存为 PDF」工具栏并自动唤起打印面板 */
-  mode: ArticleHtmlMode;
 }
 
 const HTML_ESCAPE: Record<string, string> = {
@@ -483,32 +479,6 @@ footer{
   display:flex;
   justify-content:space-between;
 }
-.toolbar{
-  position:sticky;
-  top:0;
-  z-index:10;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:16px;
-  padding:12px 20px;
-  background:#1a1712;
-  color:#efe9dd;
-  font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
-  font-size:13px;
-  line-height:1.6;
-}
-.toolbar button{
-  flex:none;
-  padding:7px 16px;
-  border:1px solid rgb(217 164 65 / .5);
-  border-radius:8px;
-  background:rgb(217 164 65 / .16);
-  color:#e7bd6a;
-  font:inherit;
-  cursor:pointer;
-}
-.toolbar button:hover{background:rgb(217 164 65 / .28)}
 @media (max-width:720px){
   .page{padding:32px 22px 48px}
   .toc ol{columns:1}
@@ -517,7 +487,6 @@ footer{
 @media print{
   body{background:#fff}
   .page{max-width:none;margin:0;padding:0;box-shadow:none}
-  .toolbar{display:none!important}
   h1,h2{color:#000}
   a{color:inherit;text-decoration:none}
   .cite{color:#7a5a12}
@@ -527,16 +496,8 @@ footer{
 @page{size:A4;margin:18mm 16mm}
 `;
 
-function renderDocument(input: ArticleHtmlInput, article: Article, body: string): string {
+function renderDocument(article: Article, body: string): string {
   const title = escapeHtml(article.title || "图文文章");
-  const toolbar =
-    input.mode === "print"
-      ? `<div class="toolbar"><span>在打印面板里选择「另存为 PDF」即可导出；页边距已按 A4 优化。</span><button type="button" onclick="window.print()">打印 / 另存为 PDF</button></div>`
-      : "";
-  const autoPrint =
-    input.mode === "print"
-      ? `<script>window.addEventListener("load",function(){setTimeout(function(){window.print()},400)});</script>`
-      : "";
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -547,11 +508,9 @@ function renderDocument(input: ArticleHtmlInput, article: Article, body: string)
 <style>${STYLE}</style>
 </head>
 <body>
-${toolbar}
 <main class="page">
 ${body}
 </main>
-${autoPrint}
 </body>
 </html>`;
 }
@@ -650,5 +609,5 @@ ${limitations}
 ${sources}
 <footer><span>V2T · 视频转文案工作站</span><span>${escapeHtml(published)}</span></footer>`;
 
-  return renderDocument(input, article, body);
+  return renderDocument(article, body);
 }

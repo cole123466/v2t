@@ -42,35 +42,23 @@ const html = renderArticleHtml({
   publishedAt: "2026-10-24T10:00:00.000Z",
   citations,
   images: new Map([["f00", "data:image/jpeg;base64,AAAA"]]),
-  mode: "print",
 });
 
 describe("HTML 导出", () => {
-  it("是自包含 HTML，带打印样式与工具栏", () => {
+  it("是自包含 HTML，带 A4 打印样式", () => {
     expect(html.startsWith("<!doctype html>")).toBe(true);
     expect(html).toContain('<html lang="zh-CN">');
     expect(html).toContain("@page{size:A4");
-    expect(html).toContain("window.print()");
-    expect(html).toContain('class="toolbar"');
+    expect(html).toContain("@media print");
     // 自包含：没有外部 css/js 引用
     expect(html).not.toMatch(/<link[^>]+href=/);
     expect(html).not.toMatch(/<script[^>]+src=/);
   });
 
-  it("document 模式不带工具栏与自动打印", () => {
-    const doc = renderArticleHtml({
-      article,
-      detailLevel: "速览",
-      purpose: null,
-      model: "glm-4.6",
-      sourceUrl: null,
-      publishedAt: "2026-10-24T10:00:00.000Z",
-      citations,
-      images: new Map(),
-      mode: "document",
-    });
-    expect(doc).not.toContain('class="toolbar"');
-    expect(doc).not.toContain("window.print()");
+  it("不含工具栏与自动打印脚本：打印由前端 iframe 触发", () => {
+    expect(html).not.toContain('class="toolbar"');
+    expect(html).not.toMatch(/<script/i);
+    expect(html).not.toContain("window.print()");
   });
 
   it("标题与元信息全部转义", () => {
