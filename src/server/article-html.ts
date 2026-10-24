@@ -44,6 +44,21 @@ export function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (ch) => HTML_ESCAPE[ch]);
 }
 
+/**
+ * 链接协议白名单：只允许 http(s)、mailto、tel 与站内相对地址。
+ * 浏览器解析 URL 前会忽略空白和控制字符，先归一化再判断，防止 "java\tscript:" 绕过。
+ */
+export function isSafeHref(href: string): boolean {
+  const normalized = href.replace(/[\u0000-\u0020\u007f]+/g, "").toLowerCase();
+  if (!normalized) return false;
+  if (/^(https?:|mailto:|tel:)/.test(normalized)) return true;
+  if (/^(\/|\.{1,2}\/|#|\?)/.test(normalized)) return true;
+  // 不含协议冒号的纯相对路径；带冒号的（javascript:/data:/vbscript: 等）一律拒绝
+  const colon = normalized.indexOf(":");
+  const pathStart = normalized.search(/[/?#]/);
+  return colon === -1 || (pathStart !== -1 && pathStart < colon);
+}
+
 function withTime(url: string, sec: number): string {
   try {
     const u = new URL(url);
@@ -98,11 +113,11 @@ function renderCite(id: string, ctx: RenderContext): string {
 function renderInlinePart(part: Inline, ctx: RenderContext): string {
   if (part.kind === "cite") return renderCite(part.id, ctx);
   if (part.kind === "link") {
+    const text = applyMarks(escapeHtml(part.text), part.marks);
+    // parseInline 目前只产出 http(s)，这里再兜一层：未来解析放宽或其它调用方传入任意 href 时也不会注入伪协议
+    if (!isSafeHref(part.href)) return text;
     const href = part.href.replace(/[<>"']/g, (ch) => encodeURIComponent(ch));
-    return `<a class="link" href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${applyMarks(
-      escapeHtml(part.text),
-      part.marks,
-    )}</a>`;
+    return `<a class="link" href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${text}</a>`;
   }
   return applyMarks(escapeHtml(part.text), part.marks);
 }
