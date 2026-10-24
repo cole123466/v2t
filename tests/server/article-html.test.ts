@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Article } from "@/server/article";
-import { escapeHtml, renderArticleHtml } from "@/server/article-html";
+import { escapeHtml, isSafeHref, renderArticleHtml } from "@/server/article-html";
 
 const article: Article = {
   title: "测试 <文章> & 标题",
@@ -113,5 +113,52 @@ describe("HTML 导出", () => {
 
   it("escapeHtml 覆盖五个特殊字符", () => {
     expect(escapeHtml(`<>&"'`)).toBe("&lt;&gt;&amp;&quot;&#39;");
+  });
+
+  it("链接协议白名单只放行 http(s)、mailto、tel 与相对地址", () => {
+    expect(isSafeHref("https://example.com/a")).toBe(true);
+    expect(isSafeHref("HTTP://example.com/a")).toBe(true);
+    expect(isSafeHref("mailto:a@b.com")).toBe(true);
+    expect(isSafeHref("tel:+8613800000000")).toBe(true);
+    expect(isSafeHref("/relative/path")).toBe(true);
+    expect(isSafeHref("//cdn.example.com/x")).toBe(true);
+    expect(isSafeHref("#anchor")).toBe(true);
+    expect(isSafeHref("?q=1")).toBe(true);
+
+    expect(isSafeHref("javascript:alert(1)")).toBe(false);
+    expect(isSafeHref("JaVaScRiPt:alert(1)")).toBe(false);
+    expect(isSafeHref("  java\tscript:alert(1)")).toBe(false);
+    expect(isSafeHref("data:text/html,<script>alert(1)</script>")).toBe(false);
+    expect(isSafeHref("vbscript:msgbox(1)")).toBe(false);
+    expect(isSafeHref("ftp://example.com/x")).toBe(false);
+  });
+
+  it("伪协议链接降级为纯文本，安全链接正常渲染", () => {
+    const renderText = (text: string): string =>
+      renderArticleHtml({
+        article: {
+          ...article,
+          sections: [{ id: "s1", title: "第一章", blocks: [{ type: "paragraph", text }] }],
+          mindMap: [],
+          limitations: [],
+        },
+        detailLevel: "标准",
+        purpose: null,
+        model: "glm-4.6",
+        sourceUrl: null,
+        publishedAt: "2026-10-24T10:00:00.000Z",
+        citations: new Map(),
+        images: new Map(),
+      });
+
+    const safe = renderText("[官网](https://example.com/x)");
+    expect(safe).toContain('<a class="link" href="https://example.com/x"');
+
+    const bad = renderText("[点我](javascript:alert(1))");
+    expect(bad).not.toContain('<a class="link"');
+    expect(bad).toContain("javascript:alert(1)");
+
+    const data = renderText("[点我](data:text/html,<script>alert(1)</script>)");
+    expect(data).not.toContain('<a class="link"');
   });
 });
