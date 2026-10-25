@@ -2,6 +2,7 @@
 
 import { useRef, useState, type RefObject } from "react";
 import { Pause, Play } from "lucide-react";
+import { safePlay } from "@/lib/media";
 import { clock } from "@/lib/time";
 
 const SPEEDS = [1, 1.25, 1.5, 2];
@@ -40,8 +41,10 @@ export function Player({
   const toggle = () => {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) void video.play();
-    else video.pause();
+    if (video.paused) {
+      // AbortError（play 被 pause/换源打断）由 safePlay 吞掉；其余错误仅记录，避免未处理 rejection
+      void safePlay(video).catch((error) => console.debug("play blocked:", error));
+    } else video.pause();
   };
 
   return (
