@@ -44,18 +44,24 @@ export function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (ch) => HTML_ESCAPE[ch]);
 }
 
+/** 链接协议判断用的正则：模块级复用，避免逐链接渲染时反复编译 */
+const HREF_SCHEME = /^(https?:|mailto:|tel:)/;
+const HREF_RELATIVE = /^(\/|\.{1,2}\/|#|\?)/;
+const HREF_IGNORED_CHARS = /[\u0000-\u0020\u007f]+/g;
+const HREF_PATH_START = /[/?#]/;
+
 /**
  * 链接协议白名单：只允许 http(s)、mailto、tel 与站内相对地址。
  * 浏览器解析 URL 前会忽略空白和控制字符，先归一化再判断，防止 "java\tscript:" 绕过。
  */
 export function isSafeHref(href: string): boolean {
-  const normalized = href.replace(/[\u0000-\u0020\u007f]+/g, "").toLowerCase();
+  const normalized = href.replace(HREF_IGNORED_CHARS, "").toLowerCase();
   if (!normalized) return false;
-  if (/^(https?:|mailto:|tel:)/.test(normalized)) return true;
-  if (/^(\/|\.{1,2}\/|#|\?)/.test(normalized)) return true;
+  if (HREF_SCHEME.test(normalized)) return true;
+  if (HREF_RELATIVE.test(normalized)) return true;
   // 不含协议冒号的纯相对路径；带冒号的（javascript:/data:/vbscript: 等）一律拒绝
   const colon = normalized.indexOf(":");
-  const pathStart = normalized.search(/[/?#]/);
+  const pathStart = normalized.search(HREF_PATH_START);
   return colon === -1 || (pathStart !== -1 && pathStart < colon);
 }
 

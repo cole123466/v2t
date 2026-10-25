@@ -156,9 +156,11 @@ describe("HTML 导出", () => {
 
     const bad = renderText("[点我](javascript:alert(1))");
     expect(bad).not.toContain('<a class="link"');
+    expect(bad).not.toContain('href="javascript');
     expect(bad).toContain("javascript:alert(1)");
 
     const data = renderText("[点我](data:text/html,<script>alert(1)</script>)");
     expect(data).not.toContain('<a class="link"');
+    expect(data).not.toContain('href="data:');
   });
 });
