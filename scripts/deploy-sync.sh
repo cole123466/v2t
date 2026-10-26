@@ -270,6 +270,14 @@ check_blockers() {
   cur=$(git -C "$REPO" symbolic-ref --short HEAD 2>/dev/null || true)
   [ "$cur" = "$BRANCH" ] || { echo "当前分支 ${cur:-detached}，不是 $BRANCH"; return 0; }
 
+  # 本地领先（有未推送提交）时不能 ff；继续跑会每 2 分钟停一次服，必须延后
+  local ahead
+  ahead=$(git -C "$REPO" rev-list --count "$REMOTE/$BRANCH..HEAD" 2>/dev/null || echo 0)
+  if [ "${ahead:-0}" -gt 0 ]; then
+    echo "本地 $BRANCH 领先 $REMOTE/$BRANCH $ahead 个提交（先推送或 rebase；部署只做快进）"
+    return 0
+  fi
+
   local f
   for f in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD; do
     if [ -e "$REPO/.git/$f" ]; then echo "git $f 进行中"; return 0; fi
