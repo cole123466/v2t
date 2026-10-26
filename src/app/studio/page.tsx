@@ -8,6 +8,14 @@ import type { Task, TaskStatus } from "@/server/tasks";
 import type { StorageStats } from "@/server/maintenance";
 import type { QueueSnapshot } from "@/server/runner";
 import { isProcessing, STATUS_LABEL } from "@/lib/task-status";
+import {
+  addUploads,
+  removeUpload,
+  setUploadProgress,
+  startNext,
+  uploadSummary,
+  type UploadItem,
+} from "@/lib/upload-queue";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { PetToggle } from "@/components/pet/pet-toggle";
 import { petFlow } from "@/components/pet/pet-flow";
@@ -31,6 +39,10 @@ const STATUS_META: Record<TaskStatus, { label: string; cls: string; dot: string 
   failed: { label: STATUS_LABEL.failed, cls: "text-danger/90", dot: "bg-danger/90" },
 };
 
+/**
+ * 任务还没落库前的本地上传项定义在 @/lib/upload-queue：
+ * 上传中的文件先在这里排队展示，上传成功后才由任务列表（服务端 queued 态）接管。
+ */
 function timeAgo(iso: string) {
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60) return "刚刚";
@@ -131,7 +143,8 @@ export default function StudioPage() {
   const [stats, setStats] = useState<StorageStats | null>(null);
   const [queue, setQueue] = useState<QueueSnapshot | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState<{ name: string; pct: number } | null>(null);
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const { active: activeUpload, waiting: waitingUploads } = uploadSummary(uploads);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [linkUrl, setLinkUrl] = useState("");
@@ -206,7 +219,7 @@ export default function StudioPage() {
       setLinkBusy(false);
       petFlow.idle();
     }
-  }, [linkUrl, linkBusy]);
+  }, [linkUrl, linkBusy, setLinkMeta]);
 
   const startLinkTask = useCallback(async () => {
     const url = linkUrl.trim();
@@ -235,43 +248,98 @@ export default function StudioPage() {
     }
   }, [linkUrl, linkBusy, router]);
 
-  const startUpload = useCallback(
-    (file: File) => {
-      if (uploading) return;
-      setError(null);
-      setUploading({ name: file.name, pct: 0 });
-      petFlow.importStart();
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", `/api/tasks?name=${encodeURIComponent(file.name)}`);
-      xhr.setRequestHeader("content-type", "application/octet-stream");
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          setUploading({ name: file.name, pct: Math.round((e.loaded / e.total) * 100) });
-        }
-      };
-      xhr.onload = () => {
-        if (xhr.status === 201) {
-          const task = JSON.parse(xhr.responseText) as Task;
-          petFlow.importDone();
-          router.push(`/task/${task.id}`);
-        } else {
+  /**
+   * 本地上传队列：ref 是唯一真源，state 只负责渲染。
+   * 一次只发一个请求（浏览器端串行），传完自动接上下一个；
+   * 第一个文件还在传时再拖进来的文件会排在后面，不会像以前那样被静默丢掉。
+   */
+  const uploadQueue = useRef<UploadItem[]>([]);
+  const uploadFiles = useRef(new Map<string, File>());
+  const pumping = useRef(false);
+
+  const syncUploads = useCallback(() => {
+    setUploads([...uploadQueue.current]);
+  }, []);
+
+  /** 发一个文件；成功即刷新任务列表（不跳转，留在工作台看队列） */
+  const sendUpload = useCallback(
+    (item: UploadItem, file: File) =>
+      new Promise<boolean>((resolve) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `/api/tasks?name=${encodeURIComponent(file.name)}`);
+        xhr.setRequestHeader("content-type", "application/octet-stream");
+        xhr.upload.onprogress = (e) => {
+          if (!e.lengthComputable) return;
+          const pct = Math.round((e.loaded / e.total) * 100);
+          uploadQueue.current = setUploadProgress(uploadQueue.current, item.id, pct);
+          syncUploads();
+        };
+        xhr.onload = () => {
+          if (xhr.status === 201) {
+            void refresh();
+            resolve(true);
+            return;
+          }
           try {
             setError((JSON.parse(xhr.responseText) as { error: string }).error);
           } catch {
             setError(`上传失败（${xhr.status}）`);
           }
-          petFlow.importFailed();
-          setUploading(null);
+          resolve(false);
+        };
+        xhr.onerror = () => {
+          setError("网络中断，上传失败");
+          resolve(false);
+        };
+        xhr.send(file);
+      }),
+    [refresh, syncUploads],
+  );
+
+  const pumpUploads = useCallback(async () => {
+    if (pumping.current) return;
+    pumping.current = true;
+    petFlow.importStart();
+    let failed = 0;
+    try {
+      for (;;) {
+        const started = startNext(uploadQueue.current);
+        if (!started.next) break;
+        uploadQueue.current = started.list;
+        syncUploads();
+        const item = started.next;
+        const file = uploadFiles.current.get(item.id);
+        if (!file) {
+          uploadQueue.current = removeUpload(uploadQueue.current, item.id);
+          continue;
         }
-      };
-      xhr.onerror = () => {
-        setError("网络中断，上传失败");
-        petFlow.importFailed();
-        setUploading(null);
-      };
-      xhr.send(file);
+        const ok = await sendUpload(item, file);
+        if (!ok) failed += 1;
+        uploadFiles.current.delete(item.id);
+        uploadQueue.current = removeUpload(uploadQueue.current, item.id);
+        syncUploads();
+      }
+    } finally {
+      pumping.current = false;
+      if (failed === 0) petFlow.importDone();
+      else petFlow.importFailed();
+    }
+  }, [sendUpload, syncUploads]);
+
+  const startUpload = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) return;
+      setError(null);
+      const fresh: UploadItem[] = files.map((file) => {
+        const id = crypto.randomUUID();
+        uploadFiles.current.set(id, file);
+        return { id, name: file.name, sizeBytes: file.size, pct: 0, state: "waiting" };
+      });
+      uploadQueue.current = addUploads(uploadQueue.current, fresh);
+      syncUploads();
+      void pumpUploads();
     },
-    [router, uploading],
+    [pumpUploads, syncUploads],
   );
 
   useEffect(() => {
@@ -289,8 +357,8 @@ export default function StudioPage() {
       e.preventDefault();
       dragDepth.current = 0;
       setDragging(false);
-      const file = e.dataTransfer?.files?.[0];
-      if (file) startUpload(file);
+      const files = Array.from(e.dataTransfer?.files ?? []);
+      if (files.length > 0) startUpload(files);
     };
     window.addEventListener("dragenter", onDragEnter);
     window.addEventListener("dragover", onDragOver);
@@ -330,21 +398,20 @@ export default function StudioPage() {
         <button
           type="button"
           onClick={() => fileInput.current?.click()}
-          disabled={uploading !== null}
           className="glass group flex min-h-64 flex-col items-center justify-center gap-4 rounded-3xl border-dashed p-10 transition-all hover:border-gold/50 hover:bg-gold/5 disabled:opacity-60"
         >
-          {uploading ? (
+          {activeUpload ? (
             <>
               <Loader className="size-9 animate-spin text-gold" strokeWidth={1.5} />
               <div className="text-center">
-                <p className="max-w-sm truncate text-sm text-paper">{uploading.name}</p>
+                <p className="max-w-sm truncate text-sm text-paper">{activeUpload.name}</p>
                 <div className="mx-auto mt-4 h-1 w-64 overflow-hidden rounded-full bg-tint/10">
                   <div
                     className="h-full rounded-full bg-gold transition-all"
-                    style={{ width: `${uploading.pct}%` }}
+                    style={{ width: `${activeUpload.pct}%` }}
                   />
                 </div>
-                <p className="mt-2 font-mono text-xs text-paper-faint">{uploading.pct}%</p>
+                <p className="mt-2 font-mono text-xs text-paper-faint">{activeUpload.pct}%</p>
               </div>
             </>
           ) : (
@@ -356,14 +423,25 @@ export default function StudioPage() {
               </div>
             </>
           )}
+          {waitingUploads.length > 0 ? (
+            <div className="text-center">
+              <p className="font-mono text-[11px] tracking-wider text-gold/80">
+                排队中 {waitingUploads.length} 个
+              </p>
+              <p className="mt-1 max-w-sm truncate text-xs text-paper-dim">
+                {waitingUploads.map((item) => item.name).join(" · ")}
+              </p>
+            </div>
+          ) : null}
           <input
             ref={fileInput}
             type="file"
+            multiple
             accept="video/*,audio/*,.mkv"
             className="hidden"
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) startUpload(file);
+              const files = Array.from(e.target.files ?? []);
+              if (files.length > 0) startUpload(files);
               e.target.value = "";
             }}
           />
