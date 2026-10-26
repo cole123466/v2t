@@ -339,10 +339,10 @@ main() {
   fi
 
   local fetch_out target head_sha cur blockers
-  if ! fetch_out=$(cd "$REPO" && GIT_TERMINAL_PROMPT=0 timeout "$GIT_TIMEOUT" git fetch "$REMOTE" "$BRANCH" --quiet 2>&1); then
+  if ! fetch_out=$(cd "$REPO" && GIT_TERMINAL_PROMPT=0 timeout "$GIT_TIMEOUT" git fetch --no-write-fetch-head "$REMOTE" "$BRANCH" --quiet 2>&1); then
     defer "git fetch 失败：$(printf '%s' "$fetch_out" | head -1)"
   fi
-  target=$(git -C "$REPO" rev-parse 'FETCH_HEAD^{commit}')
+  target=$(git -C "$REPO" rev-parse "refs/remotes/$REMOTE/$BRANCH")
   head_sha=$(git -C "$REPO" rev-parse HEAD)
 
   cur=$(git -C "$REPO" symbolic-ref --short HEAD 2>/dev/null || true)
