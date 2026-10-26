@@ -156,10 +156,14 @@ export default function StudioPage() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
-    const { tasks, stats, queue } = await fetchDashboard();
-    if (tasks) setTasks(tasks);
-    if (stats) setStats(stats);
-    if (queue) setQueue(queue);
+    try {
+      const { tasks, stats, queue } = await fetchDashboard();
+      if (tasks) setTasks(tasks);
+      if (stats) setStats(stats);
+      if (queue) setQueue(queue);
+    } catch {
+      // 刷新失败保留旧数据；页面每 4 秒轮询会重试，不打断上传队列
+    }
   }, []);
 
   const removeTask = useCallback(
@@ -268,6 +272,7 @@ export default function StudioPage() {
         const xhr = new XMLHttpRequest();
         xhr.open("POST", `/api/tasks?name=${encodeURIComponent(file.name)}`);
         xhr.setRequestHeader("content-type", "application/octet-stream");
+        xhr.timeout = 30 * 60 * 1000;
         xhr.upload.onprogress = (e) => {
           if (!e.lengthComputable) return;
           const pct = Math.round((e.loaded / e.total) * 100);
@@ -291,7 +296,16 @@ export default function StudioPage() {
           setError("网络中断，上传失败");
           resolve(false);
         };
-        xhr.send(file);
+        xhr.ontimeout = () => {
+          setError("上传超时，请检查网络后重试");
+          resolve(false);
+        };
+        try {
+          xhr.send(file);
+        } catch (error) {
+          setError(error instanceof Error ? error.message : "上传失败");
+          resolve(false);
+        }
       }),
     [refresh, syncUploads],
   );
@@ -299,9 +313,9 @@ export default function StudioPage() {
   const pumpUploads = useCallback(async () => {
     if (pumping.current) return;
     pumping.current = true;
-    petFlow.importStart();
     let failed = 0;
     try {
+      petFlow.importStart();
       for (;;) {
         const started = startNext(uploadQueue.current);
         if (!started.next) break;
@@ -311,18 +325,30 @@ export default function StudioPage() {
         const file = uploadFiles.current.get(item.id);
         if (!file) {
           uploadQueue.current = removeUpload(uploadQueue.current, item.id);
+          syncUploads();
           continue;
         }
-        const ok = await sendUpload(item, file);
+        let ok = false;
+        try {
+          ok = await sendUpload(item, file);
+        } catch (error) {
+          setError(error instanceof Error ? error.message : "上传失败");
+        }
         if (!ok) failed += 1;
         uploadFiles.current.delete(item.id);
         uploadQueue.current = removeUpload(uploadQueue.current, item.id);
         syncUploads();
       }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "上传队列异常");
     } finally {
       pumping.current = false;
-      if (failed === 0) petFlow.importDone();
-      else petFlow.importFailed();
+      try {
+        if (failed === 0) petFlow.importDone();
+        else petFlow.importFailed();
+      } catch {
+        // 桌宠动画失败不影响上传队列
+      }
     }
   }, [sendUpload, syncUploads]);
 
