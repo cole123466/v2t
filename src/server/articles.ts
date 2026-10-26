@@ -108,12 +108,13 @@ export class ArticleStore {
       title: string | null;
       content: Article | null;
       outline: ArticleDraftOutline | null;
+      model: string;
       error: string | null;
     }>,
   ): void {
     const sets: string[] = [];
     const params: Record<string, string | null> = { id };
-    for (const key of ["status", "title", "error"] as const) {
+    for (const key of ["status", "title", "model", "error"] as const) {
       if (key in patch) {
         sets.push(`${key} = @${key}`);
         params[key] = patch[key] ?? null;
@@ -292,6 +293,17 @@ export class ArticleService {
       segments: input.catalog.transcripts.length,
     });
 
+    // 一篇文章可能同时用到文本模型（提纲）与视觉模型（带画面的章节），
+    // 按实际调用去重记录，避免整篇都被记成默认文本模型
+    const usedModels: string[] = [];
+    const onModel = (model: string) => {
+      if (usedModels.includes(model)) return;
+      usedModels.push(model);
+      const used = usedModels.join(" + ");
+      record.model = used;
+      this.opts.store.update(record.id, { model: used });
+    };
+
     try {
       // 第一步：提纲
       input.onProgress?.({ stage: "outline" });
@@ -302,7 +314,13 @@ export class ArticleService {
           { role: "user", content: outlinePrompt(input.catalog, detail, purpose) },
         ],
         () => {},
-        { operation: "article.outline", taskId: input.taskId, traceId: input.traceId, signal: input.signal },
+        {
+          operation: "article.outline",
+          taskId: input.taskId,
+          traceId: input.traceId,
+          signal: input.signal,
+          onModel,
+        },
       );
       const outline = this.parseOutline(outlineRaw);
       this.opts.store.update(record.id, { outline, title: outline.title });
@@ -373,6 +391,7 @@ export class ArticleService {
             taskId: input.taskId,
             traceId: input.traceId,
             signal: input.signal,
+            onModel,
           });
           try {
             parsed = JSON.parse(looseJsonBody(raw)) as SectionPayload;

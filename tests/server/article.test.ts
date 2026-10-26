@@ -534,6 +534,45 @@ describe("两步生成（提纲 → 逐章）", () => {
     expect(text).toContain("重点讲清操作步骤");
   });
 
+  it("模型字段按实际调用记录：提纲文本模型与章节视觉模型都落库", async () => {
+    const store = new ArticleStore(db);
+    let call = 0;
+    const llm: LLMProvider = {
+      async generate(_messages, onChunk, meta) {
+        call += 1;
+        if (call === 1) {
+          meta?.onModel?.("glm-4.6");
+          onChunk("提纲");
+          return JSON.stringify({
+            title: "模型记录",
+            sections: [{ id: "s1", title: "第一章", summary: "要点" }],
+            mindMap: [],
+          });
+        }
+        meta?.onModel?.("glm-4.6v");
+        onChunk("章节");
+        return JSON.stringify({
+          id: "s1",
+          title: "第一章",
+          blocks: [{ type: "paragraph", text: "正文 [[t01]]" }],
+        });
+      },
+    };
+    const svc = new ArticleService({
+      store,
+      llm,
+      readFrame: async () => "data:image/jpeg;base64,AAAA",
+    });
+    const record = await svc.generate({
+      taskId: "task-article-model",
+      catalog: buildCatalog(TRANSCRIPT, MANIFEST),
+      frameFiles: new Map([["f00", "frames/f00.jpg"]]),
+    });
+
+    expect(record.model).toBe("glm-4.6 + glm-4.6v");
+    expect(store.get(record.id)?.model).toBe("glm-4.6 + glm-4.6v");
+  });
+
   it("模型输出非 JSON：文章标记 failed 并带错误", async () => {
     const store = new ArticleStore(db);
     const llm: LLMProvider = {

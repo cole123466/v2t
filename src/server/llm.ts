@@ -54,6 +54,8 @@ async function streamOnce(
 
   const startedAt = Date.now();
   const model = pickModel(messages);
+  // 实际模型由这里决定（可能从文本模型切到视觉模型），先告知调用方再发请求
+  meta?.onModel?.(model);
   const fields = {
     provider: "llm",
     model,

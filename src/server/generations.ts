@@ -78,10 +78,13 @@ export class GenerationStore {
     return gen;
   }
 
-  update(id: string, patch: { output?: string; status?: Generation["status"]; error?: string | null }): void {
+  update(
+    id: string,
+    patch: { output?: string; model?: string; status?: Generation["status"]; error?: string | null },
+  ): void {
     const sets: string[] = [];
     const params: Record<string, string | null> = { id };
-    for (const key of ["output", "status", "error"] as const) {
+    for (const key of ["output", "model", "status", "error"] as const) {
       if (key in patch) {
         sets.push(`${key} = @${key}`);
         params[key] = patch[key] ?? null;
@@ -134,6 +137,8 @@ export interface LLMCallMeta {
   traceId?: string;
   /** 客户端断开时中止上游流式请求，避免继续占用连接与内存 */
   signal?: AbortSignal;
+  /** 本次调用实际使用的模型（provider 按消息是否带图选择），供调用方落库 */
+  onModel?: (model: string) => void;
 }
 
 export interface LLMProvider {
@@ -232,7 +237,18 @@ export class GenerationService {
           gen.output += delta;
           onChunk?.(delta);
         },
-        { operation: `copywriting.${input.mode}`, taskId, traceId, signal },
+        {
+          operation: `copywriting.${input.mode}`,
+          taskId,
+          traceId,
+          signal,
+          // 记录模型以 provider 实际选用为准（带图会切到视觉模型），不再只写默认文本模型
+          onModel: (model) => {
+            if (model === gen.model) return;
+            gen.model = model;
+            this.opts.store.update(gen.id, { model });
+          },
+        },
       );
       this.opts.store.update(gen.id, { output, status: "done" });
       logInfo("copywriting generation completed", {

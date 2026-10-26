@@ -7,6 +7,7 @@ import {
   GenerationService,
   GenerationStore,
   PRESET_TEMPLATES,
+  type LLMCallMeta,
   type LLMMessage,
   type LLMProvider,
 } from "@/server/generations";
@@ -18,11 +19,19 @@ let store: GenerationStore;
 /** 假 LLM：分片推流并记录收到的 messages */
 type ChatMessage = LLMMessage;
 
-function makeFakeLlm(behavior: "ok" | "boom"): LLMProvider & { messages: ChatMessage[] } {
+function makeFakeLlm(
+  behavior: "ok" | "boom",
+  reportedModel = "glm-test",
+): LLMProvider & { messages: ChatMessage[] } {
   const self = {
     messages: [] as ChatMessage[],
-    async generate(messages: ChatMessage[], onChunk: (delta: string) => void): Promise<string> {
+    async generate(
+      messages: ChatMessage[],
+      onChunk: (delta: string) => void,
+      meta?: LLMCallMeta,
+    ): Promise<string> {
       self.messages = messages;
+      meta?.onModel?.(reportedModel);
       if (behavior === "boom") throw new Error("LLM 服务不可用（模拟）");
       onChunk("第一段。");
       onChunk("第二段。");
@@ -99,6 +108,19 @@ describe("文案生成（Seam B）", () => {
     expect(list.length).toBeGreaterThanOrEqual(2);
     expect(list[0].id).toBe(g2.id);
     expect(list.some((g) => g.id === g1.id)).toBe(true);
+  });
+
+  it("模型字段以实际调用为准：provider 报告视觉模型时覆盖默认文本模型", async () => {
+    const fake = makeFakeLlm("ok", "glm-4.6v");
+    const svc = new GenerationService({ store, llm: fake });
+    const gen = await svc.generateForTask(
+      TASK_A,
+      { segments: [{ start: 0, end: 5, text: "看画面写文案" }] },
+      { mode: "manual", prompt: "结合画面写一段" },
+    );
+
+    expect(gen.model).toBe("glm-4.6v");
+    expect(store.get(gen.id)?.model).toBe("glm-4.6v");
   });
 
   it("LLM 失败：版本保留为 failed 且带错误原因", async () => {
