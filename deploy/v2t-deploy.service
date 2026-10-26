@@ -1,0 +1,16 @@
+[Unit]
+Description=V2T deploy sync (pull origin/main and restart dev)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/bash @REPO@/scripts/deploy-sync.sh
+TimeoutStartSec=1200
+Nice=10
+SyslogIdentifier=v2t-deploy
+StandardOutput=journal
+StandardError=journal

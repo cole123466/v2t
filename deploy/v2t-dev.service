@@ -1,0 +1,21 @@
+[Unit]
+Description=V2T Next.js dev server (4317)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+Environment=HOME=/root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/bash @REPO@/scripts/start-dev.sh
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=30
+SyslogIdentifier=v2t-dev
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

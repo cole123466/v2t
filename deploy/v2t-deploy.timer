@@ -1,0 +1,11 @@
+[Unit]
+Description=Check v2t origin/main every 2 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Unit=v2t-deploy.service
+
+[Install]
+WantedBy=timers.target
