@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addUploads,
+  createUploadId,
   removeUpload,
   setUploadProgress,
   startNext,
@@ -13,6 +14,23 @@ function item(id: string, state: UploadItem["state"] = "waiting", pct = 0): Uplo
 }
 
 describe("浏览器上传队列", () => {
+  describe("createUploadId", () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("安全上下文优先用 crypto.randomUUID", () => {
+      const randomUUID = vi.fn(() => "123e4567-e89b-12d3-a456-426614174000");
+      vi.stubGlobal("crypto", { randomUUID });
+      expect(createUploadId()).toBe("123e4567-e89b-12d3-a456-426614174000");
+      expect(randomUUID).toHaveBeenCalledOnce();
+    });
+
+    it("非安全上下文没有 randomUUID 时回退到本地串", () => {
+      vi.stubGlobal("crypto", {});
+      const id = createUploadId();
+      expect(id).toMatch(/^u-[a-z0-9]+-[a-z0-9]+$/);
+    });
+  });
+
   describe("addUploads", () => {
     it("按顺序追加，统一从 waiting / 0% 起步", () => {
       const existing = [item("a", "uploading", 42)];

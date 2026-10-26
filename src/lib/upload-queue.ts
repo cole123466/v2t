@@ -19,6 +19,19 @@ export interface NewUpload {
   sizeBytes: number;
 }
 
+/**
+ * 生成上传项 id：crypto.randomUUID 只在安全上下文（HTTPS / localhost）可用，
+ * 通过 http://内网IP 访问时不存在，直接调用会让上传整体抛错；这里做本地回退。
+ */
+export function createUploadId(): string {
+  const c = globalThis.crypto;
+  if (typeof c !== "undefined" && typeof c.randomUUID === "function") {
+    return c.randomUUID();
+  }
+  const rand = Math.random().toString(36).slice(2, 10) || "0";
+  return `u-${Date.now().toString(36)}-${rand}`;
+}
+
 /** 追加待传文件，统一从 0% 的 waiting 起步 */
 export function addUploads(list: UploadItem[], files: NewUpload[]): UploadItem[] {
   return [

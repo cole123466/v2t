@@ -10,6 +10,7 @@ import type { QueueSnapshot } from "@/server/runner";
 import { isProcessing, STATUS_LABEL } from "@/lib/task-status";
 import {
   addUploads,
+  createUploadId,
   removeUpload,
   setUploadProgress,
   startNext,
@@ -357,7 +358,7 @@ export default function StudioPage() {
       if (files.length === 0) return;
       setError(null);
       const fresh: UploadItem[] = files.map((file) => {
-        const id = crypto.randomUUID();
+        const id = createUploadId();
         uploadFiles.current.set(id, file);
         return { id, name: file.name, sizeBytes: file.size, pct: 0, state: "waiting" };
       });
