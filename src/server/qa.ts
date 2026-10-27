@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { normalizeCitations } from "./article";
+import { citationRetryNote } from "@/lib/citations";
 import type { Transcript, TranscriptSegment } from "./asr";
 import type { Db } from "./db";
 import { bind, rows as many } from "./sql";
 import type { LLMProvider } from "./generations";
-import { elapsedMs, errorFields, logError, logInfo } from "./log";
+import { elapsedMs, errorFields, logError, logInfo, logWarn } from "./log";
 
 /** 回答中的时间引用（点击联动播放器） */
 export interface QaCitation {
@@ -256,92 +257,117 @@ export class QaService {
       .map((c) => `[t${String(c.index + 1).padStart(2, "0")}] ${formatTime(c.segment.start)}-${formatTime(c.segment.end)} ${c.segment.text}`)
       .join("\n");
 
-    let raw: string;
-    try {
-      raw = await this.opts.llm.generate(
-        [
-          { role: "system", content: QA_SYSTEM },
-          {
-            role: "user",
-            content: [
-              `问题：${question}`,
-              "",
-              candidates.length === 0
-                ? "（转写稿为空，只能说明无法回答）"
-                : sampled
-                  ? "（未检索到直接相关段落，以下是全片均匀抽样，请据此判断能否回答）"
-                  : full
-                    ? "完整转写稿："
-                    : "相关转写段落：",
-              context,
-              "",
-              "只输出 JSON：",
-              '{"answer":"回答正文，含 [[tNN]] 引用","limitations":["未确认之处"]}',
-            ].join("\n"),
-          },
-        ],
-        (delta) => input.onDelta?.(delta),
-        { operation: "qa.answer", taskId: input.taskId, traceId: input.traceId },
-      );
-    } catch (err) {
-      logError("qa answer failed", {
+    const knownExample =
+      input.transcript.segments.length > 0
+        ? `[[t01]]…[[t${String(input.transcript.segments.length).padStart(2, "0")}]]`
+        : "（转写稿为空，正文不要写引用标记）";
+
+    // 一次问答最多两次调用：出现非法编号时重问一次（15 号票 C1/C5），
+    // 仍非法则降级交付（移除编号 + limitations 声明），绝不交付假证据。
+    const runOnce = async (extraNote: string, emitDelta: boolean): Promise<{
+      normalized: string;
+      parsedLimitations: string[];
+      valid: QaCitation[];
+      invalidTokens: string[];
+    }> => {
+      const userContent = [
+        `问题：${question}`,
+        "",
+        candidates.length === 0
+          ? "（转写稿为空，只能说明无法回答）"
+          : sampled
+            ? "（未检索到直接相关段落，以下是全片均匀抽样，请据此判断能否回答）"
+            : full
+              ? "完整转写稿："
+              : "相关转写段落：",
+        context,
+        "",
+        "只输出 JSON：",
+        '{"answer":"回答正文，含 [[tNN]] 引用","limitations":["未确认之处"]}',
+        extraNote,
+      ].join("\n");
+      let raw: string;
+      try {
+        raw = await this.opts.llm.generate(
+          [
+            { role: "system", content: QA_SYSTEM },
+            { role: "user", content: userContent },
+          ],
+          (delta) => emitDelta && input.onDelta?.(delta),
+          { operation: "qa.answer", taskId: input.taskId, traceId: input.traceId },
+        );
+      } catch (err) {
+        logError("qa answer failed", {
+          task_id: input.taskId,
+          trace_id: input.traceId,
+          ...errorFields(err),
+          duration_ms: elapsedMs(startedAt),
+        });
+        throw err;
+      }
+      const parsed = parseAnswer(raw);
+      // 引用格式先规范化（模型常少写方括号），再校验编号白名单
+      const normalized = normalizeCitations(parsed.answer);
+      const valid: QaCitation[] = [];
+      const invalidTokens: string[] = [];
+      for (const token of Array.from(normalized.matchAll(/\[\[(t\d{2,})\]\]/g), (m) => m[1])) {
+        const index = citationIndex(token);
+        if (index === null || index < 0 || index >= input.transcript.segments.length) {
+          invalidTokens.push(token);
+          continue;
+        }
+        const segment = input.transcript.segments[index];
+        if (!valid.some((c) => c.segmentIndex === index)) {
+          valid.push({
+            segmentIndex: index,
+            start: segment.start,
+            end: segment.end,
+            quote: segment.text,
+          });
+        }
+      }
+      return { normalized, parsedLimitations: parsed.limitations, valid, invalidTokens };
+    };
+
+    let attempt = await runOnce("", true);
+    if (attempt.invalidTokens.length > 0) {
+      logWarn("qa invalid citations, retrying once", {
         task_id: input.taskId,
         trace_id: input.traceId,
-        ...errorFields(err),
-        duration_ms: elapsedMs(startedAt),
+        invalid: attempt.invalidTokens.length,
       });
-      throw err;
+      const retried = await runOnce(citationRetryNote(attempt.invalidTokens, knownExample), false);
+      if (retried.invalidTokens.length === 0) attempt = retried;
     }
 
-    const parsed = parseAnswer(raw);
-    // 引用格式先规范化（模型常少写方括号），再校验编号范围
-    const normalized = normalizeCitations(parsed.answer);
-    const valid: QaCitation[] = [];
-    const invalidTokens: string[] = [];
-    for (const token of Array.from(normalized.matchAll(/\[\[(t\d{2,})\]\]/g), (m) => m[1])) {
-      const index = citationIndex(token);
-      if (index === null || index < 0 || index >= input.transcript.segments.length) {
-        invalidTokens.push(token);
-        continue;
-      }
-      const segment = input.transcript.segments[index];
-      if (!valid.some((c) => c.segmentIndex === index)) {
-        valid.push({
-          segmentIndex: index,
-          start: segment.start,
-          end: segment.end,
-          quote: segment.text,
-        });
-      }
-    }
-
-    let text = normalized;
-    for (const token of invalidTokens) {
+    // 降级交付：仍有非法编号 → 保留回答但移除编号 + 声明（lenient）
+    let text = attempt.normalized;
+    for (const token of attempt.invalidTokens) {
       text = text.split(`[[${token}]]`).join("");
     }
-    const limitations = [...parsed.limitations];
-    if (invalidTokens.length > 0) {
-      limitations.push(`已移除 ${invalidTokens.length} 个无法核实的出处编号`);
+    const limitations = [...attempt.parsedLimitations];
+    if (attempt.invalidTokens.length > 0) {
+      limitations.push(`已移除 ${attempt.invalidTokens.length} 个无法核实的出处编号`);
     }
 
     const message = this.opts.store.add({
       taskId: input.taskId,
       role: "assistant",
       content: text,
-      citations: valid,
+      citations: attempt.valid,
       limitations,
     });
     logInfo("qa answer completed", {
       task_id: input.taskId,
       trace_id: input.traceId,
       message_id: message.id,
-      citations: valid.length,
-      invalid_citations: invalidTokens.length,
+      citations: attempt.valid.length,
+      invalid_citations: attempt.invalidTokens.length,
       limitations: limitations.length,
       chars: text.length,
       duration_ms: elapsedMs(startedAt),
     });
-    return { message, answer: { text, citations: valid, limitations } };
+    return { message, answer: { text, citations: attempt.valid, limitations } };
   }
 }
 

@@ -3,9 +3,11 @@ import { getLlmConfig } from "./config";
 import type { Db } from "./db";
 import { bind, row as one, rows as many } from "./sql";
 import type { ActivityStore } from "./activities";
+import { checkCitations, citationRetryNote, knownCitationIds } from "@/lib/citations";
 import type { LLMMessage, LLMProvider } from "./generations";
 import { elapsedMs, errorFields, logError, logInfo, logWarn } from "./log";
 import {
+  blockText,
   looseJsonBody,
   normalizeArticle,
   validateBlocks,
@@ -469,6 +471,19 @@ export class ArticleService {
         }
       }
 
+      // 引用白名单：一次构造、多处复用（15 号票 C2/C3）
+      const knownCitations = knownCitationIds(
+        input.catalog.allowTimeCitations ? input.catalog.transcripts.map((t) => t.id) : [],
+        input.catalog.frames.map((f) => f.id),
+      );
+      const knownExample =
+        input.catalog.transcripts.length > 0
+          ? `[[t01]]…[[t${String(input.catalog.transcripts.length).padStart(2, "0")}]]` +
+            (input.catalog.frames.length > 0
+              ? ` 与 [[f00]]…[[f${String(input.catalog.frames.length - 1).padStart(2, "0")}]]`
+              : "")
+          : "（本任务没有可用编号，正文不要写引用标记）";
+
       // 第二步：逐章生成（每章一次调用，带该章相关画面）；resume 跳过已存章节
       const existing = new Map((input.resume?.existingSections ?? []).map((s) => [s.id, s]));
       const sections = [] as Article["sections"];
@@ -524,8 +539,15 @@ export class ArticleService {
               : lastError
                 ? "上一次输出不是合法的 JSON。请只输出一个 JSON 对象，不要任何解释、不要 Markdown 围栏；" +
                   "正文里不要出现英文双引号（改用中文引号「」），总长度控制在 1200 字以内。"
-                : `上一次输出的块字段不合规：${blockProblems.join("；")}。` +
-                  "请严格按上面的块类型与配额输出，只输出 JSON。";
+                : blockProblems.some((p) => p.includes("引用") && p.includes("不存在"))
+                  ? citationRetryNote(
+                      blockProblems
+                        .map((p) => /引用 (t\d+|f\d+) 不存在/.exec(p)?.[1])
+                        .filter((x): x is string => Boolean(x)),
+                      knownExample,
+                    ) + "请只输出 JSON。"
+                  : `上一次输出的块字段不合规：${blockProblems.join("；")}。` +
+                    "请严格按上面的块类型与配额输出，只输出 JSON。";
           const messages: LLMMessage[] =
             attempt === 0
               ? [
@@ -559,8 +581,13 @@ export class ArticleService {
               limitations: [],
             });
             const issues = validateBlocks(normalized, input.catalog);
-            if (issues.length > 0) {
-              blockProblems = issues.slice(0, 5).map((p) => p.message);
+            // 15 号票 C1：章内引用白名单校验（strict），与块校验共用同一 attempt<2 预算
+            const sectionText = normalized.sections[0].blocks.map((b) => blockText(b)).join(" ");
+            const citationCheck = checkCitations(sectionText, knownCitations);
+            const citationProblems = citationCheck.invalid.map((t) => `时间/画面引用 ${t} 不存在`);
+            const allProblems = [...issues.map((p) => p.message), ...citationProblems];
+            if (allProblems.length > 0) {
+              blockProblems = allProblems.slice(0, 5);
               lastError = null;
               parsed = null;
               logWarn("article section retry", {
@@ -569,7 +596,7 @@ export class ArticleService {
                 article_id: record.id,
                 section: section.id,
                 attempt: attempt + 1,
-                reason: "invalid_blocks",
+                reason: citationProblems.length > 0 ? "invalid_citations" : "invalid_blocks",
                 problems: blockProblems.length,
               });
               continue;
