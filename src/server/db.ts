@@ -92,7 +92,15 @@ const TABLES = [
      error TEXT,
      created_at TEXT NOT NULL,
      updated_at TEXT NOT NULL
-   );`,
+  );`,
+  // 11 号票（decision-share-history）：单篇只读分享。删行即撤销；重新分享插入新 id
+  `CREATE TABLE IF NOT EXISTS shares (
+     id TEXT PRIMARY KEY,
+     token TEXT NOT NULL UNIQUE,
+     task_id TEXT NOT NULL,
+     article_id TEXT NOT NULL,
+     created_at TEXT NOT NULL
+  );`,
 ];
 
 /** 追加列（幂等：重复执行时忽略 duplicate column 错误） */
@@ -123,6 +131,7 @@ const INDEXES = [
   "CREATE INDEX IF NOT EXISTS activities_run ON activities(run_id, seq)",
   "CREATE INDEX IF NOT EXISTS activities_task_run ON activities(task_id, run_id)",
   "CREATE INDEX IF NOT EXISTS jobs_pick ON jobs(status, created_at)",
+  "CREATE INDEX IF NOT EXISTS shares_task ON shares(task_id)",
 ];
 
 export function openDb(file: string): Db {

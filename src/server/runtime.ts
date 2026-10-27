@@ -12,6 +12,7 @@ import { runArticleJob } from "./article-jobs";
 import { createOpenAiCompatibleLlm } from "./llm";
 import { failOrphanTasks, purgeExpiredMedia, type MaintenanceDeps } from "./maintenance";
 import { QaService, QaStore } from "./qa";
+import { ShareStore } from "./shares";
 import { TaskRunner } from "./runner";
 import { createYtDlpProvider, type SourceProvider } from "./source";
 import { TaskStore } from "./tasks";
@@ -30,6 +31,7 @@ export interface Runtime extends MaintenanceDeps {
   worker: JobWorker;
   qa: QaStore;
   qaService: QaService;
+  shares: ShareStore;
   dataDir: string;
   source: SourceProvider;
 }
@@ -40,7 +42,7 @@ export interface Runtime extends MaintenanceDeps {
  * 不做版本校验就会出现「代码已是新的、拿到的 runner 还是旧的」——
  * 例如调用 runner.isQueueFull() 抛 "is not a function"。
  */
-export const RUNTIME_VERSION = 3;
+export const RUNTIME_VERSION = 4;
 
 interface CachedRuntime {
   version: number;
@@ -117,6 +119,7 @@ export function getRuntime(): Runtime {
     });
     const qa = new QaStore(db);
     const qaService = new QaService({ store: qa, llm });
+    const shares = new ShareStore(db);
     const runtime: Runtime = {
       db,
       store,
@@ -130,6 +133,7 @@ export function getRuntime(): Runtime {
       worker,
       qa,
       qaService,
+      shares,
       dataDir,
       source,
     };
