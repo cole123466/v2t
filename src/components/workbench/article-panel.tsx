@@ -15,6 +15,7 @@ import {
 import type { MindMapNode } from "@/server/article";
 import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
 import { ArticleBlockView, InlineText } from "./article-block";
+import { ReviewSidebar } from "./review-sidebar";
 import { RequestIdLine } from "./request-id";
 import { petFlow } from "@/components/pet/pet-flow";
 
@@ -92,6 +93,8 @@ export function ArticlePanel({
   const [exporting, setExporting] = useState<"md" | "zip" | "html" | "pdf" | null>(null);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
   const abortRef = useRef<AbortController | null>(null);
+  // 正文滚动容器（审稿旁栏「查看对应章节」做容器内定位）
+  const articleScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     return () => abortRef.current?.abort();
@@ -536,7 +539,16 @@ export function ArticlePanel({
       ) : null}
 
       {active?.content ? (
-        <div className="glass min-h-0 flex-1 overflow-auto rounded-2xl p-6">
+        <ReviewSidebar
+          taskId={taskId}
+          articleId={active.id}
+          articleReady={active.status === "done"}
+          scrollRef={articleScrollRef}
+        />
+      ) : null}
+
+      {active?.content ? (
+        <div className="glass min-h-0 flex-1 overflow-auto rounded-2xl p-6" ref={articleScrollRef}>
           {/* 正文限宽：过宽的行长会让阅读跳行，正文区在宽屏下居中 */}
           <div className="mx-auto w-full max-w-[44rem]">
           {active.status === "streaming" ? (

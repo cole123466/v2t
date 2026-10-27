@@ -93,6 +93,21 @@ const TABLES = [
      created_at TEXT NOT NULL,
      updated_at TEXT NOT NULL
    );`,
+  // 10 号票（decision-review-quality）：手动审稿，每次审核一行，历史全留。
+  // trigger 列不做——R1 定死只手动触发，无自动/手动之分，也不需要幂等索引
+  `CREATE TABLE IF NOT EXISTS article_reviews (
+     id TEXT PRIMARY KEY,
+     task_id TEXT NOT NULL,
+     article_id TEXT NOT NULL,
+     job_id TEXT NOT NULL,
+     status TEXT NOT NULL,
+     model TEXT,
+     summary TEXT,
+     findings TEXT,
+     error TEXT,
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL
+   );`,
 ];
 
 /** 追加列（幂等：重复执行时忽略 duplicate column 错误） */
@@ -123,6 +138,7 @@ const INDEXES = [
   "CREATE INDEX IF NOT EXISTS activities_run ON activities(run_id, seq)",
   "CREATE INDEX IF NOT EXISTS activities_task_run ON activities(task_id, run_id)",
   "CREATE INDEX IF NOT EXISTS jobs_pick ON jobs(status, created_at)",
+  "CREATE INDEX IF NOT EXISTS reviews_article ON article_reviews(article_id, created_at)",
 ];
 
 export function openDb(file: string): Db {

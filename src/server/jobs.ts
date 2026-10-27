@@ -267,6 +267,15 @@ export class JobStore {
           )
           .run({ articleId: job.articleId, error: `服务重启导致中断，已保存 ${done.n}/${total.n} 章` });
       }
+      // 10 号票：review job 的中断折算——review 行置 failed（不自动重跑，R1 手动语义），
+      // 文章正文不受影响（只在 status='running' 的审核行上操作）
+      if (job.kind === "review") {
+        this.db
+          .prepare(
+            "UPDATE article_reviews SET status = 'failed', error = @error, updated_at = @now WHERE job_id = @jobId AND status IN ('queued', 'running')",
+          )
+          .run({ jobId: job.id, error: "服务重启导致审核中断", now });
+      }
     }
     logWarn("jobs reaped on startup", { count: running.length });
     return running.length;

@@ -9,6 +9,7 @@ import { applyDataFixes } from "./migration";
 import { GenerationService, GenerationStore } from "./generations";
 import { JobStore, JobWorker } from "./jobs";
 import { runArticleJob } from "./article-jobs";
+import { runReviewJob, ReviewStore } from "./reviews";
 import { createOpenAiCompatibleLlm } from "./llm";
 import { failOrphanTasks, purgeExpiredMedia, type MaintenanceDeps } from "./maintenance";
 import { QaService, QaStore } from "./qa";
@@ -30,6 +31,7 @@ export interface Runtime extends MaintenanceDeps {
   worker: JobWorker;
   qa: QaStore;
   qaService: QaService;
+  reviews: ReviewStore;
   dataDir: string;
   source: SourceProvider;
 }
@@ -40,7 +42,7 @@ export interface Runtime extends MaintenanceDeps {
  * 不做版本校验就会出现「代码已是新的、拿到的 runner 还是旧的」——
  * 例如调用 runner.isQueueFull() 抛 "is not a function"。
  */
-export const RUNTIME_VERSION = 3;
+export const RUNTIME_VERSION = 4;
 
 interface CachedRuntime {
   version: number;
@@ -110,10 +112,26 @@ export function getRuntime(): Runtime {
         return `data:image/jpeg;base64,${bytes.toString("base64")}`;
       },
     });
+    const reviews = new ReviewStore(db);
     const worker = new JobWorker({
       jobs,
-      run: (job, signal, emit) =>
-        runArticleJob({ jobs, articles, articleService, dataDir }, job, signal, emit),
+      run: (job, signal, emit) => {
+        if (job.kind === "review") {
+          // 10 号票：审稿 job。单次 LLM 调用，只写 article_reviews，不碰文章正文。
+          return runReviewJob(
+            {
+              reviews,
+              llm,
+              dataDir,
+              articleContent: async (articleId) => articles.get(articleId)?.content ?? null,
+            },
+            job,
+            signal,
+            emit,
+          );
+        }
+        return runArticleJob({ jobs, articles, articleService, dataDir }, job, signal, emit);
+      },
     });
     const qa = new QaStore(db);
     const qaService = new QaService({ store: qa, llm });
@@ -130,6 +148,7 @@ export function getRuntime(): Runtime {
       worker,
       qa,
       qaService,
+      reviews,
       dataDir,
       source,
     };
@@ -149,7 +168,7 @@ export function getRuntime(): Runtime {
     if (orphans > 0) logWarn("orphan tasks marked failed", { count: orphans });
 
     // 媒体保留期清理：启动时一次 + 每日一次（转录与文案永久保留）
-    const deps: MaintenanceDeps = { store, generations, articles, activities, qa, jobs, dataDir };
+    const deps: MaintenanceDeps = { store, generations, articles, activities, qa, jobs, reviews, dataDir };
     const runPurge = () =>
       purgeExpiredMedia(deps, { retentionDays: getRetentionDays() })
         .then((count) => {
