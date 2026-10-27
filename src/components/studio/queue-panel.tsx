@@ -26,6 +26,8 @@ export function QueuePanel({
     setCancelingId(id);
     try {
       await onCancel(id);
+    } catch (err) {
+      console.error("取消任务失败", err);
     } finally {
       setCancelingId(null);
     }
