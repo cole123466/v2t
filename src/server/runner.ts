@@ -290,7 +290,6 @@ export class TaskRunner {
           for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
             const chunkAt = Date.now();
-            stepMessage(`转写 ${i + 1}/${chunks.length} 段`);
             const part = await this.opts.asr.transcribe(chunk.file);
             logInfo("asr chunk completed", {
               task_id: taskId,
