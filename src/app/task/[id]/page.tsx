@@ -173,8 +173,8 @@ export default function TaskPage() {
       <main className="flex min-h-svh flex-col items-center justify-center gap-6 px-6 text-center">
         <X className="size-10 text-danger/80" strokeWidth={1.5} />
         <h1 className="font-display text-3xl font-semibold">任务不存在</h1>
-        <Link href="/studio" className="font-mono text-xs tracking-widest text-paper-faint hover:text-gold">
-          返回工作台
+        <Link href="/studio/tasks" className="font-mono text-xs tracking-widest text-paper-faint hover:text-gold">
+          返回任务列表
         </Link>
       </main>
     );
@@ -201,11 +201,11 @@ export default function TaskPage() {
         <PetToggle />
         <ThemeToggle />
         <Link
-          href="/studio"
+          href="/studio/tasks"
           className="inline-flex shrink-0 items-center gap-2 font-mono text-xs tracking-widest text-paper-faint transition-colors hover:text-gold"
         >
           <ArrowLeft className="size-3.5" strokeWidth={1.5} />
-          工作台
+          任务列表
         </Link>
       </div>
     </header>
