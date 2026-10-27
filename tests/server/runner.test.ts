@@ -16,15 +16,6 @@ let store: TaskStore;
 let runner: TaskRunner;
 let fixture: string;
 
-/** 轮询等待任务进入某个状态，避免对内部调度节奏做固定 sleep */
-async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() > deadline) throw new Error("等待任务状态超时");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-}
-
 async function makeTask(name: string, sourceFile: string) {
   const task = store.create({ originalName: name, ext: path.extname(name), sizeBytes: 123 });
   const taskDir = path.join(dir, "tasks", task.id);
@@ -117,8 +108,13 @@ describe("TaskRunner（Seam A · 串行管线）", () => {
 
     const first = await makeTask("gated-a.mp4", fixture);
     const second = await makeTask("gated-b.mp4", fixture);
+    const firstTranscribing = new Promise<void>((resolve) => {
+      gated.subscribe(first.id, (t) => {
+        if (t.status === "transcribing") resolve();
+      });
+    });
     gated.enqueue(first.id);
-    await waitFor(() => store.get(first.id)?.status === "transcribing");
+    await firstTranscribing;
 
     // 处理中再入队：任务既不丢，也不会被单次 kick 丢掉
     gated.enqueue(second.id);
