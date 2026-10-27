@@ -6,6 +6,7 @@ import type { ActivityStore } from "./activities";
 import type { ArticleStore } from "./articles";
 import type { GenerationStore } from "./generations";
 import { audioPath, sourcePath, taskDir } from "./paths";
+import type { JobStore } from "./jobs";
 import type { QaStore } from "./qa";
 import type { TaskStore } from "./tasks";
 
@@ -16,6 +17,7 @@ export interface MaintenanceDeps {
   articles?: ArticleStore;
   activities?: ActivityStore;
   qa?: QaStore;
+  jobs?: JobStore;
 }
 
 const DAY_MS = 86_400_000;
@@ -69,6 +71,8 @@ export async function deleteTask(deps: MaintenanceDeps, id: string): Promise<boo
   deps.store.remove(id);
   deps.generations.removeAllForTask(id);
   deps.articles?.removeAllForTask(id);
+  // jobs 先于 activities 删（父概念在前，便于将来加外键；14 号票）
+  deps.jobs?.removeAllForTask(id);
   deps.activities?.removeAllForTask(id);
   deps.qa?.removeAllForTask(id);
   return true;
