@@ -116,6 +116,12 @@ const COLUMNS: Array<{ table: string; column: string; ddl: string }> = [
   { table: "activities", column: "attempt_no", ddl: "INTEGER NOT NULL DEFAULT 1" },
   { table: "activities", column: "article_id", ddl: "TEXT" },
   { table: "activities", column: "usage_json", ddl: "TEXT" },
+  // 09 号票（decision-qa-evidence）P3 轮模型：turn_id/status 仅 assistant 行有终态，
+  // context 是锚点 JSON（section/transcript/frame 三种 kind），error 记失败原因
+  { table: "qa_messages", column: "turn_id", ddl: "TEXT" },
+  { table: "qa_messages", column: "status", ddl: "TEXT" },
+  { table: "qa_messages", column: "context", ddl: "TEXT" },
+  { table: "qa_messages", column: "error", ddl: "TEXT" },
 ];
 
 /** 追加索引（幂等） */

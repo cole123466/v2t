@@ -80,6 +80,7 @@ describe("SSE 错误事件携带 request_id", () => {
       store: { getOwned: () => ({ id: "task-1", status: "ready" }) },
       dataDir: "/tmp/v2t-test",
       activities: activities(),
+      qa: { lastTurn: () => [] },
       qaService: {
         ask: async () => {
           throw new Error("模拟问答失败");
