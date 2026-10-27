@@ -269,29 +269,116 @@ export interface GenerateArticleInput {
   purpose?: string | null;
   onProgress?: (event: { stage: string; message?: string }) => void;
   onDelta?: (delta: string) => void;
-  /** 客户端断开时中止后续章节的上游请求 */
+  /** 中止信号：08 号票后仅来自 worker（stop/cancel），不再接 HTTP 请求 */
   signal?: AbortSignal;
+}
+
+/** 08 号票：worker 执行入口的输入。runId 即 jobId（命名修正：执行就是 job） */
+export interface RunForJobInput {
+  taskId: string;
+  traceId?: string;
+  catalog: CitationCatalog;
+  frameFiles: Map<string, string>;
+  /** 目标文章行（创建时即确定） */
+  articleId: string;
+  /** run/job id：步骤都挂在这个 id 下 */
+  runId: string;
+  /** resume 输入：旧 job 的提纲 + 已存章节（跳过不重生成） */
+  resume?: { outline: ArticleDraftOutline; existingSections: ArticleSection[] };
+  signal?: AbortSignal;
+  onProgress?: (event: { stage: string; message?: string }) => void;
+  onDelta?: (delta: string) => void;
+  hooks?: {
+    onOutline?: (outline: ArticleDraftOutline) => void;
+    onSectionDone?: (done: number, total: number) => void;
+    onPhase?: (phase: string) => void;
+  };
+}
+
+interface PipelineInput {
+  taskId: string;
+  traceId?: string;
+  catalog: CitationCatalog;
+  frameFiles: Map<string, string>;
+  detail: ArticleDetailLevel;
+  purpose: string | null;
+  record: ArticleRecord;
+  runId: string | null;
+  signal?: AbortSignal;
+  resume?: { outline: ArticleDraftOutline; existingSections: ArticleSection[] };
+  /** resume 的降级交付：发布前校验失败不阻塞，文章置 done + error 摘要 */
+  downgradeOnValidateFail?: boolean;
+  onProgress?: (event: { stage: string; message?: string }) => void;
+  onDelta?: (delta: string) => void;
+  hooks?: RunForJobInput["hooks"];
 }
 
 export class ArticleService {
   constructor(private readonly opts: ArticleServiceOptions) {}
 
+  /** 同步生成（保留给测试与旧调用方；生产路径走 runForJob） */
   async generate(input: GenerateArticleInput): Promise<ArticleRecord> {
     const detail = input.detailLevel ?? "standard";
     const purpose = input.purpose?.trim() || null;
-    const startedAt = Date.now();
     const record = this.opts.store.create({
       taskId: input.taskId,
       detailLevel: detail,
       purpose,
       model: getLlmConfig().model,
     });
+    const runId = this.opts.activities?.newRunId() ?? null;
+    return this.runPipeline({
+      taskId: input.taskId,
+      traceId: input.traceId,
+      catalog: input.catalog,
+      frameFiles: input.frameFiles,
+      detail,
+      purpose,
+      record,
+      runId,
+      signal: input.signal,
+      onProgress: input.onProgress,
+      onDelta: input.onDelta,
+    });
+  }
+
+  /**
+   * 08 号票：后台执行入口。文章行已存在（创建时即建），本方法负责提纲/章节/发布；
+   * resume 时跳过已存章节，只补齐缺失部分。
+   */
+  async runForJob(input: RunForJobInput): Promise<ArticleRecord> {
+    const record = this.opts.store.get(input.articleId);
+    if (!record) throw new Error("文章记录不存在");
+    return this.runPipeline({
+      taskId: input.taskId,
+      traceId: input.traceId,
+      catalog: input.catalog,
+      frameFiles: input.frameFiles,
+      detail: record.detailLevel,
+      purpose: record.purpose,
+      record,
+      runId: input.runId,
+      signal: input.signal,
+      resume: input.resume,
+      downgradeOnValidateFail: Boolean(input.resume),
+      onProgress: input.onProgress,
+      onDelta: input.onDelta,
+      hooks: input.hooks,
+    });
+  }
+
+  private async runPipeline(input: PipelineInput): Promise<ArticleRecord> {
+    const detail = input.detail;
+    const purpose = input.purpose;
+    const record = input.record;
+    const startedAt = Date.now();
     logInfo("article generation started", {
       task_id: input.taskId,
       trace_id: input.traceId,
       article_id: record.id,
       detail,
       has_purpose: purpose !== null,
+      resume: Boolean(input.resume),
       frames: input.catalog.frames.length,
       segments: input.catalog.transcripts.length,
     });
@@ -307,44 +394,62 @@ export class ArticleService {
       this.opts.store.update(record.id, { model: used });
     };
 
-    const runId = this.opts.activities?.newRunId() ?? null;
-    // 记录当前 run 里最后一批 section 步骤 id，便于每章完成时置状态
+    const runId = input.runId;
     const sectionStepIds: string[] = [];
     const steps = this.opts.activities;
-    const outlineStep = steps?.start({
-      taskId: input.taskId,
-      kind: "stage",
-      runId,
-      phase: "outline",
-      title: "生成提纲",
-      articleId: record.id,
-    });
+    let outlineStep = null as ReturnType<NonNullable<typeof steps>["start"]> | null;
+    if (!input.resume) {
+      outlineStep =
+        steps?.start({
+          taskId: input.taskId,
+          kind: "stage",
+          runId,
+          phase: "outline",
+          title: "生成提纲",
+          articleId: record.id,
+        }) ?? null;
+    }
     input.onProgress?.({ stage: "outline" });
 
     try {
-      // 第一步：提纲
-      const outlineAt = Date.now();
-      const outlineRaw = await this.opts.llm.generate(
-        [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: outlinePrompt(input.catalog, detail, purpose) },
-        ],
-        () => {},
-        {
-          operation: "article.outline",
-          taskId: input.taskId,
-          traceId: input.traceId,
-          signal: input.signal,
-          onModel,
-        },
-      );
-      const outline = this.parseOutline(outlineRaw);
-      this.opts.store.update(record.id, { outline, title: outline.title });
-      steps?.finish(outlineStep!.id, {
-        ok: true,
-        status: "completed",
-        message: `${outline.sections.length} 章`,
-      });
+      // 第一步：提纲（resume 时直接复用）
+      let outline: ArticleDraftOutline;
+      if (input.resume) {
+        outline = input.resume.outline;
+        input.hooks?.onOutline?.(outline);
+      } else {
+        const outlineAt = Date.now();
+        const outlineRaw = await this.opts.llm.generate(
+          [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: outlinePrompt(input.catalog, detail, purpose) },
+          ],
+          () => {},
+          {
+            operation: "article.outline",
+            taskId: input.taskId,
+            traceId: input.traceId,
+            signal: input.signal,
+            onModel,
+          },
+        );
+        outline = this.parseOutline(outlineRaw);
+        this.opts.store.update(record.id, { outline, title: outline.title });
+        steps?.finish(outlineStep!.id, {
+          ok: true,
+          status: "completed",
+          message: `${outline.sections.length} 章`,
+        });
+        input.hooks?.onOutline?.(outline);
+        logInfo("article outline ready", {
+          task_id: input.taskId,
+          trace_id: input.traceId,
+          article_id: record.id,
+          sections: outline.sections.length,
+          duration_ms: elapsedMs(outlineAt),
+        });
+      }
+
       // 计划即步骤集合：预插入 N 条 queued 章节步骤（D4：不落库计划快照）
       const planAt = new Date().toISOString();
       sectionStepIds.length = 0;
@@ -363,25 +468,30 @@ export class ArticleService {
           sectionStepIds.push(step.id);
         }
       }
-      logInfo("article outline ready", {
-        task_id: input.taskId,
-        trace_id: input.traceId,
-        article_id: record.id,
-        sections: outline.sections.length,
-        duration_ms: elapsedMs(outlineAt),
-      });
 
-      // 第二步：逐章生成（每章一次调用，带该章相关画面）
+      // 第二步：逐章生成（每章一次调用，带该章相关画面）；resume 跳过已存章节
+      const existing = new Map((input.resume?.existingSections ?? []).map((s) => [s.id, s]));
       const sections = [] as Article["sections"];
+      let doneCount = 0;
       for (let i = 0; i < outline.sections.length; i++) {
-        if (input.signal?.aborted) throw new Error("客户端已断开，文章生成已中止");
+        if (input.signal?.aborted) throw new Error("生成已中止");
         const section = outline.sections[i];
         const sectionStepId = sectionStepIds[i];
+        const kept = existing.get(section.id);
+        if (kept) {
+          // 已存章节不重新生成、不重新校验（避免旧内容因规则变化而卡死）
+          sections.push(kept);
+          doneCount += 1;
+          steps?.updateStatus(sectionStepId, "completed", "已保存，跳过");
+          input.hooks?.onSectionDone?.(doneCount, outline.sections.length);
+          continue;
+        }
         steps?.updateStatus(sectionStepId, "running");
         input.onProgress?.({
           stage: "section",
           message: `${i + 1}/${outline.sections.length} ${section.title}`,
         });
+        input.hooks?.onPhase?.("write");
         const sectionAt = Date.now();
         const images = await this.pickSectionFrames(
           i,
@@ -489,6 +599,7 @@ export class ArticleService {
           title: parsed.title?.trim() || section.title,
           blocks: parsedBlocks,
         });
+        doneCount += 1;
         // 章节增量落库：content 与步骤 completed 必须相邻落库（同一同步块内），
         // 保证「步骤 completed ⇒ 内容已可读」（07 号票验收 2/3 的前提）
         this.opts.store.update(record.id, {
@@ -501,6 +612,7 @@ export class ArticleService {
           status: "streaming",
         });
         steps?.updateStatus(sectionStepId, "completed");
+        input.hooks?.onSectionDone?.(doneCount, outline.sections.length);
         logInfo("article section ready", {
           task_id: input.taskId,
           trace_id: input.traceId,
@@ -520,6 +632,7 @@ export class ArticleService {
         mindMap: outline.mindMap,
         limitations: [],
       });
+      input.hooks?.onPhase?.("validate");
       const validateStep = steps?.start({
         taskId: input.taskId,
         kind: "stage",
@@ -538,10 +651,31 @@ export class ArticleService {
           .slice(0, 8)
           .map((p) => p.message)
           .join("；")}`;
+        if (input.downgradeOnValidateFail) {
+          // resume 降级交付：已存章节不重校，失败只记录不阻塞（08 号票）
+          steps?.finish(validateStep!.id, { ok: false, status: "failed", message: msg.slice(0, 200) });
+          const publishStep = steps?.start({
+            taskId: input.taskId,
+            kind: "stage",
+            runId,
+            phase: "publish",
+            title: "发布文章",
+            articleId: record.id,
+          });
+          this.opts.store.update(record.id, {
+            content: article,
+            status: "done",
+            title: article.title,
+            error: `部分引用未通过校验：${problems.slice(0, 3).map((p) => p.message).join("；")}`,
+          });
+          steps?.finish(publishStep!.id, { ok: true, status: "completed" });
+          return { ...record, outline, content: article, status: "done", title: article.title };
+        }
         steps?.finish(validateStep!.id, { ok: false, status: "failed", message: msg.slice(0, 200) });
         throw new Error(msg);
       }
       steps?.finish(validateStep!.id, { ok: true, status: "completed" });
+      input.hooks?.onPhase?.("publish");
       const publishStep = steps?.start({
         taskId: input.taskId,
         kind: "stage",
@@ -550,7 +684,7 @@ export class ArticleService {
         title: "发布文章",
         articleId: record.id,
       });
-      this.opts.store.update(record.id, { content: article, status: "done", title: article.title });
+      this.opts.store.update(record.id, { content: article, status: "done", title: article.title, error: null });
       steps?.finish(publishStep!.id, { ok: true, status: "completed" });
       logInfo("article generation completed", {
         task_id: input.taskId,
@@ -563,11 +697,9 @@ export class ArticleService {
       return { ...record, outline, content: article, status: "done", title: article.title };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // 步骤终态回写：客户端断开 → 当前步骤 canceled；其余失败 → failed
+      // 步骤终态回写：中止 → 当前步骤 canceled；其余失败 → failed
       const aborted = input.signal?.aborted === true || message.includes("已中止");
-      const runningIds = steps
-        ? this.runningStepIds(runId)
-        : [];
+      const runningIds = steps ? this.runningStepIds(runId) : [];
       for (const sid of runningIds) {
         steps!.updateStatus(sid, aborted ? "canceled" : "failed", aborted ? "生成已中断" : message.slice(0, 200));
       }
@@ -579,8 +711,8 @@ export class ArticleService {
         });
       }
       this.opts.store.update(record.id, {
-        status: "failed",
-        error: aborted ? "生成已中断，可重新生成" : message,
+        status: aborted ? "interrupted" : "failed",
+        error: aborted ? "生成已中断，可继续生成" : message,
       });
       logError("article generation failed", {
         task_id: input.taskId,

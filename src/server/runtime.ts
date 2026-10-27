@@ -7,7 +7,8 @@ import { getAsrChunkSeconds, getDataDir, getRetentionDays } from "./config";
 import { openDb, type Db } from "./db";
 import { applyDataFixes } from "./migration";
 import { GenerationService, GenerationStore } from "./generations";
-import { JobStore } from "./jobs";
+import { JobStore, JobWorker } from "./jobs";
+import { runArticleJob } from "./article-jobs";
 import { createOpenAiCompatibleLlm } from "./llm";
 import { failOrphanTasks, purgeExpiredMedia, type MaintenanceDeps } from "./maintenance";
 import { QaService, QaStore } from "./qa";
@@ -26,6 +27,7 @@ export interface Runtime extends MaintenanceDeps {
   articleService: ArticleService;
   activities: ActivityStore;
   jobs: JobStore;
+  worker: JobWorker;
   qa: QaStore;
   qaService: QaService;
   dataDir: string;
@@ -38,12 +40,15 @@ export interface Runtime extends MaintenanceDeps {
  * 不做版本校验就会出现「代码已是新的、拿到的 runner 还是旧的」——
  * 例如调用 runner.isQueueFull() 抛 "is not a function"。
  */
-export const RUNTIME_VERSION = 2;
+export const RUNTIME_VERSION = 3;
 
 interface CachedRuntime {
   version: number;
   runtime: Runtime;
 }
+
+// worker 生命周期挂在 globalThis 上，与 runtime 一起重建
+const globalWorker = globalThis as { __v2tWorker?: JobWorker };
 
 // dev 模式下 HMR 会重建模块，用 globalThis 保住单例连接、队列与定时器
 const globalForV2t = globalThis as {
@@ -67,6 +72,9 @@ export function getRuntime(): Runtime {
       clearInterval(globalForV2t.__v2tPurgeTimer);
       globalForV2t.__v2tPurgeTimer = undefined;
     }
+    // worker 先停（abort 当前 job、置内存标志），残留由下次启动 reap 兜底
+    globalWorker.__v2tWorker?.stop();
+    globalWorker.__v2tWorker = undefined;
     cached.runtime.db.close();
     globalForV2t.__v2tRuntime = undefined;
   }
@@ -102,6 +110,11 @@ export function getRuntime(): Runtime {
         return `data:image/jpeg;base64,${bytes.toString("base64")}`;
       },
     });
+    const worker = new JobWorker({
+      jobs,
+      run: (job, signal, emit) =>
+        runArticleJob({ jobs, articles, articleService, dataDir }, job, signal, emit),
+    });
     const qa = new QaStore(db);
     const qaService = new QaService({ store: qa, llm });
     const runtime: Runtime = {
@@ -114,12 +127,16 @@ export function getRuntime(): Runtime {
       articleService,
       activities,
       jobs,
+      worker,
       qa,
       qaService,
       dataDir,
       source,
     };
     globalForV2t.__v2tRuntime = { version: RUNTIME_VERSION, runtime };
+    // 后台执行：先数据改判（已在 openDb 后完成）再启动 worker（08 号票）
+    globalWorker.__v2tWorker = worker;
+    worker.start();
 
     logInfo("runtime initialised", {
       data_dir: dataDir,

@@ -97,6 +97,36 @@ export function ArticlePanel({
     return () => abortRef.current?.abort();
   }, []);
 
+  // 刷新恢复：挂载时若有进行中的文章，重新订阅其事件流（08 号票）
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`/api/tasks/${taskId}/articles`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { articles?: ArticleRecord[] } | null) => {
+        if (cancelled || !data?.articles) return;
+        setArticles(data.articles);
+        const streaming = data.articles.find((a) => a.status === "streaming");
+        if (streaming && !busy) {
+          setBusy(true);
+          setStage("继续接收生成进度");
+          petFlow.working();
+          const ctrl = new AbortController();
+          abortRef.current = ctrl;
+          void subscribe(streaming.id, ctrl)
+            .catch(() => {})
+            .finally(() => {
+              if (abortRef.current === ctrl) abortRef.current = null;
+              setBusy(false);
+              setStage(null);
+            });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId]);
+
   useEffect(() => {
     void fetch(`/api/tasks/${taskId}/citations`)
       .then((r) => (r.ok ? r.json() : null))
@@ -142,6 +172,62 @@ export function ArticlePanel({
     void video.play().catch(() => {});
   };
 
+  // 08 号票：生成改为后台任务。POST 拿 202 + jobId，随后订阅 events；
+  // 断开连接不再中止生成，刷新回来重新订阅即可。
+  const subscribe = async (articleId: string, ctrl: AbortController) => {
+    const res = await fetch(`/api/tasks/${taskId}/articles/${articleId}/events`, {
+      signal: ctrl.signal,
+    });
+    if (!res.ok || !res.body) return;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split("\n\n");
+      buffer = blocks.pop() ?? "";
+      for (const block of blocks) {
+        const event = /^event: (.+)$/m.exec(block)?.[1];
+        const dataLine = /^data: (.+)$/m.exec(block)?.[1];
+        if (!event || !dataLine) continue;
+        const data = JSON.parse(dataLine) as Record<string, unknown>;
+        if (event === "snapshot") {
+          const article = data.article as ArticleRecord | undefined;
+          if (article) {
+            setArticles((prev) => {
+              const idx = prev.findIndex((a) => a.id === article.id);
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = article;
+                return next;
+              }
+              return [article, ...prev];
+            });
+            setSelected(article.id);
+          }
+        } else if (event === "step") {
+          const stage = data.stage as string | undefined;
+          const message = data.message ? ` ${data.message}` : "";
+          if (stage === "outline") setStage("生成提纲");
+          else if (stage === "section") setStage(`撰写章节${message}`);
+          else if (data.phase) setStage(String(data.phase));
+        } else if (event === "delta") {
+          setStreamText((prev) => prev + String(data.delta ?? ""));
+        } else if (event === "done") {
+          setStage(null);
+          petFlow.done();
+          await load();
+        } else if (event === "error") {
+          petFlow.failed();
+          setError(String(data.message ?? "生成失败"));
+          setStage(null);
+        }
+      }
+    }
+  };
+
   const generate = async () => {
     if (busy) return;
     setBusy(true);
@@ -159,55 +245,56 @@ export function ArticlePanel({
         body: JSON.stringify({ detailLevel: detail, purpose }),
         signal: ctrl.signal,
       });
-      if (!res.ok || !res.body) {
-        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+      const data = (await res.json().catch(() => null)) as {
+        error?: string;
+        jobId?: string;
+        articleId?: string;
+      } | null;
+      if (!res.ok || !data?.articleId) {
         setRequestId(res.headers.get("x-request-id"));
         setError(data?.error ?? `生成失败（${res.status}）`);
         petFlow.failed();
         return;
       }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split("\n\n");
-        buffer = blocks.pop() ?? "";
-        for (const block of blocks) {
-          const event = /^event: (.+)$/m.exec(block)?.[1];
-          const dataLine = /^data: (.+)$/m.exec(block)?.[1];
-          if (!event || !dataLine) continue;
-          const data = JSON.parse(dataLine) as Record<string, unknown>;
-          if (event === "progress") {
-            const message = data.message ? ` ${data.message}` : "";
-            setStage(`${data.stage === "outline" ? "生成提纲" : "撰写章节"}${message}`);
-          } else if (event === "delta") {
-            setStreamText((cur) => cur + String(data.delta ?? ""));
-          } else if (event === "done") {
-            setStage(null);
-            petFlow.done();
-            await load();
-            setSelected(String((data as { id?: string }).id ?? ""));
-          } else if (event === "error") {
-            petFlow.failed();
-            const problems = Array.isArray(data.problems) ? (data.problems as Array<{ field: string; message: string }>) : [];
-            setRequestId(
-              typeof data.request_id === "string"
-                ? data.request_id
-                : res.headers.get("x-request-id"),
-            );
-            setError(
-              problems.length > 0
-                ? `${String(data.message)}：${problems.map((p) => p.message).join("；")}`
-                : String(data.message ?? "生成失败"),
-            );
-          }
-        }
-      }
+      await subscribe(data.articleId, ctrl);
     } catch (err) {
-      if (ctrl.signal.aborted) return; // 卸载/中断不算失败，不发桌宠信号
+      if (ctrl.signal.aborted) return;
+      setError(err instanceof Error ? err.message : String(err));
+      petFlow.failed();
+    } finally {
+      if (abortRef.current === ctrl) abortRef.current = null;
+      setBusy(false);
+      setStage(null);
+    }
+  };
+
+  const cancelGeneration = async (articleId: string) => {
+    await fetch(`/api/tasks/${taskId}/articles/${articleId}/cancel`, { method: "POST" });
+    abortRef.current?.abort();
+    setBusy(false);
+    setStage(null);
+    await load();
+  };
+
+  const resumeGeneration = async (articleId: string) => {
+    setBusy(true);
+    setError(null);
+    setStreamText("");
+    setStage("继续生成");
+    petFlow.working();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/articles/${articleId}/resume`, { method: "POST" });
+      const data = (await res.json().catch(() => null)) as { error?: string; articleId?: string } | null;
+      if (!res.ok || !data?.articleId) {
+        setError(data?.error ?? `继续生成失败（${res.status}）`);
+        petFlow.failed();
+        return;
+      }
+      await subscribe(data.articleId, ctrl);
+    } catch (err) {
+      if (ctrl.signal.aborted) return;
       setError(err instanceof Error ? err.message : String(err));
       petFlow.failed();
     } finally {
@@ -405,6 +492,28 @@ export function ArticlePanel({
           {busy ? <Loader className="size-3.5 animate-spin" strokeWidth={1.5} /> : <FileText className="size-3.5" strokeWidth={1.5} />}
           {busy ? "生成中" : articles.some((a) => a.status === "done") ? "重新生成" : "生成图文文章"}
         </button>
+
+        {busy && active ? (
+          <button
+            type="button"
+            onClick={() => void cancelGeneration(active.id)}
+            className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-xl border border-danger/30 bg-danger/5 px-3 py-1.5 font-mono text-[10px] tracking-wider text-danger/80 transition-colors hover:bg-danger/15"
+          >
+            <X className="size-3" strokeWidth={1.5} />
+            取消生成
+          </button>
+        ) : null}
+
+        {!busy && active && (active.status === "interrupted" || active.status === "failed") && active.content ? (
+          <button
+            type="button"
+            onClick={() => void resumeGeneration(active.id)}
+            className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-xl border border-gold/40 bg-gold/10 px-3 py-1.5 font-mono text-[10px] tracking-wider text-gold transition-colors hover:bg-gold/20"
+          >
+            <RotateCcw className="size-3" strokeWidth={1.5} />
+            已保存 {active.content.sections.length} 章 · 继续生成
+          </button>
+        ) : null}
 
         {stage ? (
           <p className="mt-2 truncate font-mono text-[10px] text-gold/80">{stage}</p>
