@@ -16,6 +16,15 @@ let store: TaskStore;
 let runner: TaskRunner;
 let fixture: string;
 
+/** 轮询等待任务进入某个状态，避免对内部调度节奏做固定 sleep */
+async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("等待任务状态超时");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 async function makeTask(name: string, sourceFile: string) {
   const task = store.create({ originalName: name, ext: path.extname(name), sizeBytes: 123 });
   const taskDir = path.join(dir, "tasks", task.id);
@@ -87,6 +96,56 @@ describe("TaskRunner（Seam A · 串行管线）", () => {
     const done = store.get(task.id) as Task;
     expect(done.status).toBe("failed");
     expect(done.error).toMatch(/ffprobe|时长/i);
+  });
+
+  it("忙时入队：新任务保持 queued 并在前一个跑完后自动开跑", async () => {
+    // 卡住 ASR，让第一个任务停在 transcribing，模拟"解析中"
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const gated = new TaskRunner({
+      store,
+      dataDir: dir,
+      asr: {
+        async transcribe() {
+          await gate;
+          return { segments: [{ start: 0, end: 1, text: "假转写" }], timestampsMissing: false };
+        },
+      },
+    });
+
+    const first = await makeTask("gated-a.mp4", fixture);
+    const second = await makeTask("gated-b.mp4", fixture);
+    gated.enqueue(first.id);
+    await waitFor(() => store.get(first.id)?.status === "transcribing");
+
+    // 处理中再入队：任务既不丢，也不会被单次 kick 丢掉
+    gated.enqueue(second.id);
+    expect(store.get(second.id)?.status).toBe("queued");
+    expect(gated.getQueueSnapshot().queued.map((t) => t.id)).toEqual([second.id]);
+    expect(gated.getQueueSnapshot().active.map((t) => t.id)).toEqual([first.id]);
+
+    release();
+    await gated.whenIdle();
+
+    expect(store.get(first.id)?.status).toBe("ready");
+    expect(store.get(second.id)?.status).toBe("ready");
+    expect(gated.getQueueSnapshot()).toMatchObject({ active: [], queued: [] });
+  });
+
+  it("前一个任务失败时，队列里的下一个仍会被取出执行", async () => {
+    const junk = path.join(dir, "junk-first.mp4");
+    await (await import("node:fs/promises")).writeFile(junk, Buffer.from("not a video"));
+    const bad = await makeTask("bad-first.mp4", junk);
+    const good = await makeTask("good-after-bad.mp4", fixture);
+
+    runner.enqueue(bad.id);
+    runner.enqueue(good.id);
+    await runner.whenIdle();
+
+    expect(store.get(bad.id)?.status).toBe("failed");
+    expect(store.get(good.id)?.status).toBe("ready");
   });
 
   it("串行：先入队者先进入 extracting，两者最终都 ready", async () => {
