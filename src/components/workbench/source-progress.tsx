@@ -52,20 +52,31 @@ export function SourceProgress({
 
   useEffect(() => {
     let alive = true;
-    const load = () =>
-      fetch(`/api/tasks/${taskId}/activities`)
+    // 请求代次守卫：慢的旧响应晚到时直接丢弃，避免覆盖新状态
+    let generation = 0;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const load = () => {
+      const gen = ++generation;
+      return fetch(`/api/tasks/${taskId}/activities`)
         .then((r) => (r.ok ? r.json() : null))
         .then((data: { activities?: ActivityRecord[] } | null) => {
-          if (alive && data?.activities) {
-            setSteps(data.activities.filter((a) => a.kind === "source"));
-          }
+          if (!alive || gen !== generation || !data?.activities) return;
+          const steps = data.activities.filter((a) => a.kind === "source");
+          setSteps(steps);
+          // 终态即停：出现失败步骤，或最后的抽帧步骤已结束——
+          // activities 不会再变化，继续轮询纯属浪费
+          const finished =
+            steps.some((s) => s.ok === false) ||
+            steps.some((s) => s.phase === "frames" && s.endedAt !== null);
+          if (finished && timer) clearInterval(timer);
         })
         .catch(() => {});
+    };
     void load();
-    const timer = setInterval(() => void load(), 5000);
+    timer = setInterval(() => void load(), 5000);
     return () => {
       alive = false;
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
     };
   }, [taskId]);
 

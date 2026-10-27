@@ -182,18 +182,35 @@ export class TaskRunner {
       const a = steps.start({ taskId, kind: "source", phase, title });
       activeStep = a.id;
     };
-    // 进度消息节流：下载回调与 ASR 分片循环高频触发，避免每次都 UPDATE activities
+    // 进度消息节流：下载回调高频触发，避免每次都 UPDATE activities；
+    // force 供低频的分片进度使用（每片一次，间隔分钟级），绕过节流
     let lastStepMessageAt = -Infinity;
-    const stepMessage = (message: string): void => {
+    const stepMessage = (message: string, force = false): void => {
       if (!steps || !activeStep) return;
       const now = Date.now();
-      if (now - lastStepMessageAt < 1000) return;
+      if (!force && now - lastStepMessageAt < 1000) return;
       lastStepMessageAt = now;
       steps.updateStatus(activeStep, "running", message);
     };
     const finishStep = (ok: boolean, message?: string): void => {
       if (steps && activeStep) steps.finish(activeStep, { ok, message: message ?? null });
       activeStep = null;
+    };
+    // 无游标时的兜底：把该任务最后一个未结束的 source 步骤标 failed，
+    // 覆盖 finishStep(true) 之后、下一 startStep 之前的失败窗口
+    const failLastRunningStep = (message: string): void => {
+      if (!steps) return;
+      const last = steps
+        .listForTask(taskId)
+        .filter((a) => a.kind === "source" && a.status === "running")
+        .pop();
+      if (last) steps.finish(last.id, { ok: false, message });
+    };
+    // 错误消息落库前剥离绝对路径：fs 错误的 message 常含服务器路径，
+    // 会经「过程」面板透出给客户端（REVIEW.md：错误细节透传客户端）
+    const safeMessage = (err: unknown): string => {
+      const raw = err instanceof Error ? err.message : String(err);
+      return raw.replaceAll(this.opts.dataDir, "…");
     };
     try {
       let ext = task.ext;
@@ -219,7 +236,6 @@ export class TaskRunner {
         // 下载器产出 media.<ext>，统一改名为管线的 source.<ext>
         const target = sourcePath(dir, ext);
         if (media.file !== target) await rename(media.file, target);
-        finishStep(true, `${(media.sizeBytes / 1024 / 1024).toFixed(1)} MB`);
         this.patch(taskId, {
           ext,
           sizeBytes: media.sizeBytes,
@@ -227,6 +243,8 @@ export class TaskRunner {
           progress: 20,
           sourceNotice: media.notice ?? task.sourceNotice,
         });
+        // 步骤收尾放在 patch 之后：patch 抛错时游标仍在，外层 catch 可标 failed
+        finishStep(true, `${(media.sizeBytes / 1024 / 1024).toFixed(1)} MB`);
         logInfo("media downloaded", {
           task_id: taskId,
           ext,
@@ -253,7 +271,6 @@ export class TaskRunner {
       const cues = await this.trySubtitles(source, dir);
 
       if (cues) {
-        finishStep(true, `容器内字幕 ${cues.length} 段`);
         const segments: TranscriptSegment[] = cues.map((c) => ({
           start: c.start,
           end: c.end,
@@ -266,11 +283,14 @@ export class TaskRunner {
           segments: segments.length,
         });
         this.patch(taskId, { status: "extracting-frames", progress: 88, transcriptOrigin: "subtitle" });
+        // 步骤收尾放在写转录稿/patch 之后：期间抛错时游标仍在，外层 catch 可标 failed
+        finishStep(true, `容器内字幕 ${cues.length} 段`);
       } else {
         logInfo("subtitle track unavailable; falling back to asr", { task_id: taskId });
-        finishStep(true, "无可用字幕，回退语音转写");
         const audio = audioPath(dir);
         this.patch(taskId, { status: "extracting", progress: 35 });
+        // 步骤收尾放在 patch 之后：patch 抛错时游标仍在，外层 catch 可标 failed
+        finishStep(true, "无可用字幕，回退语音转写");
         startStep("asr", "语音转写");
         stepMessage("抽取 16kHz 单声道音频");
         await extractAudio(source, audio);
@@ -290,6 +310,7 @@ export class TaskRunner {
           for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
             const chunkAt = Date.now();
+            stepMessage(`转写 ${i + 1}/${chunks.length} 段`, true);
             const part = await this.opts.asr.transcribe(chunk.file);
             logInfo("asr chunk completed", {
               task_id: taskId,
@@ -322,6 +343,8 @@ export class TaskRunner {
 
         segments.sort((a, b) => a.start - b.start);
         await this.writeTranscript(dir, info.durationSec, segments, language, timestampsMissing);
+        this.patch(taskId, { status: "extracting-frames", progress: 88, transcriptOrigin: "asr" });
+        // 步骤收尾放在写转录稿/patch 之后：期间抛错时游标仍在，外层 catch 可标 failed
         finishStep(true, `转录稿 ${segments.length} 段`);
         logInfo("transcript ready", {
           task_id: taskId,
@@ -330,7 +353,6 @@ export class TaskRunner {
           language,
           timestamps_missing: timestampsMissing,
         });
-        this.patch(taskId, { status: "extracting-frames", progress: 88, transcriptOrigin: "asr" });
       }
 
       // 阶段 3：全景帧（失败不阻塞就绪——抽帧只影响文章与画面问答）
@@ -361,13 +383,24 @@ export class TaskRunner {
       logInfo("task ready", { task_id: taskId, duration_ms: elapsedMs(startedAt) });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      finishStep(false, message);
+      // 先落任务状态与日志，再收尾步骤：finishStep 若因 DB 异常抛错，
+      // 不能吞掉 patch(failed)——否则任务会永久卡在中间状态
       this.patch(taskId, { status: "failed", error: message });
       logError("task failed", {
         task_id: taskId,
         ...errorFields(err),
         duration_ms: elapsedMs(startedAt),
       });
+      const stepMessage = safeMessage(err);
+      try {
+        if (steps && activeStep) finishStep(false, stepMessage);
+        else failLastRunningStep(stepMessage);
+      } catch (stepErr) {
+        logError("task failed: finalize activities step error", {
+          task_id: taskId,
+          ...errorFields(stepErr),
+        });
+      }
     }
   }
 
