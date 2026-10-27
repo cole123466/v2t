@@ -7,7 +7,7 @@ import type { QueueSnapshot } from "@/server/runner";
 
 /**
  * 落地页的队列指示：只在有任务处理中或排队中时出现，
- * 点击直接进工作台。落地页没有任务数据，这里只读 /api/queue。
+ * 点击进任务列表。落地页没有任务数据，这里只读 /api/queue。
  */
 export function QueueBadge() {
   const [queue, setQueue] = useState<QueueSnapshot | null>(null);
@@ -37,7 +37,7 @@ export function QueueBadge() {
 
   return (
     <Link
-      href="/studio"
+      href="/studio/tasks"
       title="当前视频处理队列"
       className="hidden items-center gap-2 rounded-full border border-tint/15 px-3.5 py-1.5 font-mono text-[11px] tracking-wider text-paper-dim transition-colors hover:border-gold/40 hover:text-gold sm:inline-flex"
     >

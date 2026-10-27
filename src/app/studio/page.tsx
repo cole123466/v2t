@@ -3,11 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Check, Link2, ListOrdered, Loader, Trash2, Upload, X } from "lucide-react";
-import type { Task, TaskStatus } from "@/server/tasks";
-import type { StorageStats } from "@/server/maintenance";
-import type { QueueSnapshot } from "@/server/runner";
-import { isProcessing, STATUS_LABEL } from "@/lib/task-status";
+import { Link2, ListOrdered, Loader, Upload, X } from "lucide-react";
+import type { Task } from "@/server/tasks";
 import {
   addUploads,
   createUploadId,
@@ -17,133 +14,18 @@ import {
   uploadSummary,
   type UploadItem,
 } from "@/lib/upload-queue";
-import { ThemeToggle } from "@/components/theme-toggle";
-import { PetToggle } from "@/components/pet/pet-toggle";
+import { QueuePanel } from "@/components/studio/queue-panel";
+import { useQueueSnapshot } from "@/hooks/use-tasks";
 import { petFlow } from "@/components/pet/pet-flow";
 
-const STATUS_META: Record<TaskStatus, { label: string; cls: string; dot: string }> = {
-  queued: { label: STATUS_LABEL.queued, cls: "text-paper-faint", dot: "bg-paper-faint" },
-  downloading: { label: STATUS_LABEL.downloading, cls: "text-gold", dot: "bg-gold animate-pulse" },
-  extracting: { label: STATUS_LABEL.extracting, cls: "text-gold", dot: "bg-gold animate-pulse" },
-  "fetching-subtitles": {
-    label: STATUS_LABEL["fetching-subtitles"],
-    cls: "text-gold",
-    dot: "bg-gold animate-pulse",
-  },
-  transcribing: { label: STATUS_LABEL.transcribing, cls: "text-gold", dot: "bg-gold animate-pulse" },
-  "extracting-frames": {
-    label: STATUS_LABEL["extracting-frames"],
-    cls: "text-gold",
-    dot: "bg-gold animate-pulse",
-  },
-  ready: { label: STATUS_LABEL.ready, cls: "text-positive/90", dot: "bg-positive/90" },
-  failed: { label: STATUS_LABEL.failed, cls: "text-danger/90", dot: "bg-danger/90" },
-};
-
-function timeAgo(iso: string) {
-  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return "刚刚";
-  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
-  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
-  return new Date(iso).toLocaleDateString("zh-CN");
-}
-
-function fmtSize(n: number) {
-  if (n > 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
-  if (n > 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
-  return `${Math.max(1, Math.round(n / 1024))} KB`;
-}
-
-/** 处理队列面板：串行管线同一时刻只处理 1 个，其余按入队顺序展示 */
-function QueuePanel({ queue }: { queue: QueueSnapshot | null }) {
-  if (!queue) return null;
-  const active = queue.active[0] ?? null;
-  const queued = queue.queued;
-  const full = queued.length >= queue.queuedLimit;
-
-  return (
-    <section className="glass mt-5 rounded-2xl px-5 py-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="flex items-center gap-2 font-mono text-[10px] tracking-widest text-paper-faint">
-          <ListOrdered className="size-3.5" strokeWidth={1.5} />
-          处理队列 / QUEUE
-        </p>
-        <p className="font-mono text-[10px] tracking-wider text-paper-faint">
-          {active ? "1 处理中" : "空闲"} · 排队{" "}
-          <span className={full ? "text-danger" : "text-paper-dim"}>
-            {queued.length}/{queue.queuedLimit}
-          </span>
-          {full ? " · 已满" : ""}
-        </p>
-      </div>
-
-      {active === null && queued.length === 0 ? (
-        <p className="mt-3 text-xs text-paper-faint">队列空闲——上传或粘贴链接后会在这里排队。</p>
-      ) : (
-        <ul className="mt-3 space-y-2">
-          {active ? (
-            <li className="flex items-center gap-3">
-              <span className="shrink-0 rounded-full border border-gold/40 bg-gold/10 px-2 py-0.5 font-mono text-[10px] tracking-wider text-gold">
-                处理中
-              </span>
-              <Link
-                href={`/task/${active.id}`}
-                className="min-w-0 flex-1 truncate text-sm text-paper hover:text-gold"
-              >
-                {active.originalName}
-              </Link>
-              <span className="shrink-0 font-mono text-[10px] text-paper-faint">
-                {STATUS_LABEL[active.status]} {active.progress}%
-              </span>
-            </li>
-          ) : null}
-          {queued.map((task, i) => (
-            <li key={task.id} className="flex items-center gap-3">
-              <span className="shrink-0 rounded-full border border-tint/10 px-2 py-0.5 font-mono text-[10px] tracking-wider text-paper-faint">
-                第 {i + 1} 位
-              </span>
-              <Link
-                href={`/task/${task.id}`}
-                className="min-w-0 flex-1 truncate text-sm text-paper-dim hover:text-gold"
-              >
-                {task.originalName}
-              </Link>
-              <span className="shrink-0 font-mono text-[10px] text-paper-faint">
-                {task.sourceKind === "link" ? "链接导入" : "本地上传"}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-/** 任务列表、存储占用与处理队列总是一起刷新，抽成一次请求组合供首屏轮询与手动刷新复用 */
-async function fetchDashboard(): Promise<{
-  tasks: Task[] | null;
-  stats: StorageStats | null;
-  queue: QueueSnapshot | null;
-}> {
-  const tasksRes = await fetch("/api/tasks");
-  const tasks = tasksRes.ok ? ((await tasksRes.json()) as { tasks: Task[] }).tasks : null;
-  const storageRes = await fetch("/api/storage");
-  const stats = storageRes.ok ? ((await storageRes.json()) as StorageStats) : null;
-  const queueRes = await fetch("/api/queue");
-  const queue = queueRes.ok ? ((await queueRes.json()) as QueueSnapshot) : null;
-  return { tasks, stats, queue };
-}
-
+/** 导入页：拖拽上传、链接导入与当前队列；任务列表见 /studio/tasks */
 export default function StudioPage() {
   const router = useRouter();
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [stats, setStats] = useState<StorageStats | null>(null);
-  const [queue, setQueue] = useState<QueueSnapshot | null>(null);
+  const { queue, refresh: refreshQueue } = useQueueSnapshot();
   const [dragging, setDragging] = useState(false);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const { active: activeUpload, waiting: waitingUploads } = uploadSummary(uploads);
   const [error, setError] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [linkUrl, setLinkUrl] = useState("");
   const [linkBusy, setLinkBusy] = useState(false);
   const [linkMeta, setLinkMeta] = useState<{ title: string; durationSec: number | null } | null>(
@@ -151,52 +33,6 @@ export default function StudioPage() {
   );
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      const { tasks, stats, queue } = await fetchDashboard();
-      if (tasks) setTasks(tasks);
-      if (stats) setStats(stats);
-      if (queue) setQueue(queue);
-    } catch {
-      // 刷新失败保留旧数据；页面每 4 秒轮询会重试，不打断上传队列
-    }
-  }, []);
-
-  const removeTask = useCallback(
-    async (id: string) => {
-      if (confirmDelete !== id) {
-        setConfirmDelete(id);
-        setTimeout(() => setConfirmDelete((cur) => (cur === id ? null : cur)), 3000);
-        return;
-      }
-      setConfirmDelete(null);
-      const res = await fetch(`/api/tasks/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const detail = (await res.json().catch(() => null)) as { error?: string } | null;
-        setError(detail?.error ?? "删除失败");
-      }
-      await refresh();
-    },
-    [confirmDelete, refresh],
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    const tick = async () => {
-      const { tasks, stats, queue } = await fetchDashboard();
-      if (cancelled) return;
-      if (tasks) setTasks(tasks);
-      if (stats) setStats(stats);
-      if (queue) setQueue(queue);
-    };
-    void tick();
-    const timer = setInterval(() => void tick(), 4000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, []);
 
   const probeLink = useCallback(async () => {
     const url = linkUrl.trim();
@@ -271,7 +107,7 @@ export default function StudioPage() {
     setUploads([...uploadQueue.current]);
   }, []);
 
-  /** 发一个文件；成功后把任务插到列表最前，留在工作台看排队，不跳转 */
+  /** 发一个文件；成功后刷新队列快照，留在导入页看排队，不跳转 */
   const sendUpload = useCallback(
     (item: UploadItem, file: File) =>
       new Promise<boolean>((resolve) => {
@@ -290,16 +126,8 @@ export default function StudioPage() {
         };
         xhr.onload = () => {
           if (xhr.status === 201) {
-            // 乐观插入：服务端已经落库为 queued，先显示出来，再拉一次权威列表
-            try {
-              const task = JSON.parse(xhr.responseText) as Task;
-              if (mounted.current) {
-                setTasks((prev) => [task, ...prev.filter((t) => t.id !== task.id)]);
-              }
-            } catch {
-              // 响应体异常时交给 refresh 兜底
-            }
-            void refresh();
+            // 服务端已落库为 queued：拉一次权威队列快照，让新任务立刻出现在队列面板
+            void refreshQueue();
             resolve(true);
             return;
           }
@@ -325,7 +153,7 @@ export default function StudioPage() {
           resolve(false);
         }
       }),
-    [refresh, syncUploads],
+    [refreshQueue, syncUploads],
   );
 
   const pumpUploads = useCallback(async () => {
@@ -416,41 +244,8 @@ export default function StudioPage() {
     };
   }, [startUpload]);
 
-  // 排队位次以服务端队列快照为准（它才是真正的取任务顺序）；
-  // 刚上传的任务可能比 4 秒一次的轮询更新得早，快照里还没有它就按列表先后
-  // （旧任务在前）补在快照已有位次之后，至少能显示"排队中（第 N 位）"。
-  const queuedPosition = new Map<string, number>();
-  if (queue) queue.queued.forEach((task, i) => queuedPosition.set(task.id, i + 1));
-  let nextPosition = queuedPosition.size;
-  for (let i = tasks.length - 1; i >= 0; i -= 1) {
-    const task = tasks[i];
-    if (task.status === "queued" && !queuedPosition.has(task.id)) {
-      queuedPosition.set(task.id, (nextPosition += 1));
-    }
-  }
-
   return (
-    <main className="mx-auto flex min-h-svh w-full max-w-5xl flex-col px-6 pb-16">
-      <header className="flex items-center justify-between py-6">
-        <div>
-          <h1 className="font-display text-3xl font-semibold">工作台</h1>
-          <p className="mt-1 font-mono text-[11px] tracking-widest text-paper-faint">
-            UPLOAD / EXTRACT / TRANSCRIBE
-          </p>
-        </div>
-        <div className="flex items-center gap-4">
-          <PetToggle />
-          <ThemeToggle />
-          <Link
-            href="/"
-            className="inline-flex items-center gap-2 font-mono text-xs tracking-widest text-paper-faint transition-colors hover:text-gold"
-          >
-            <ArrowLeft className="size-3.5" strokeWidth={1.5} />
-            V2T
-          </Link>
-        </div>
-      </header>
-
+    <>
       <div className="grid gap-5 md:grid-cols-[1fr_260px]">
         <button
           type="button"
@@ -565,89 +360,19 @@ export default function StudioPage() {
 
       <QueuePanel queue={queue} />
 
-      <section className="mt-12">
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="font-mono text-[11px] tracking-widest text-paper-faint">任务 / TASKS</h2>
-          {stats ? (
-            <p className="font-mono text-[11px] tracking-wider text-paper-faint">
-              {stats.taskCount} 任务 · 媒体 {fmtSize(stats.mediaBytes)} · 共 {fmtSize(stats.totalBytes)}
-            </p>
-          ) : null}
-        </div>
-        {tasks.length === 0 ? (
-          <p className="mt-6 text-sm text-paper-faint">还没有任务——从上传一个视频开始。</p>
-        ) : (
-          <ul className="mt-4 divide-y divide-tint/5">
-            {tasks.map((task) => {
-              const meta = STATUS_META[task.status];
-              const processing = isProcessing(task.status);
-              return (
-                <li key={task.id} className="flex items-center gap-2">
-                  <Link
-                    href={`/task/${task.id}`}
-                    className="group flex min-w-0 flex-1 items-center gap-4 py-4 transition-colors hover:bg-tint/[0.02]"
-                  >
-                    <span className={`size-1.5 shrink-0 rounded-full ${meta.dot}`} />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm text-paper group-hover:text-gold">
-                        {task.sourceKind === "link" ? (
-                          <Link2 className="mr-1.5 inline size-3 text-paper-faint" strokeWidth={1.5} />
-                        ) : null}
-                        {task.originalName}
-                        {task.mediaPurgedAt ? (
-                          <span className="ml-2 font-mono text-[10px] tracking-wider text-paper-faint">
-                            媒体已清理
-                          </span>
-                        ) : null}
-                      </p>
-                      <p className="mt-0.5 font-mono text-[11px] text-paper-faint">
-                        {task.sizeBytes > 0 ? `${fmtSize(task.sizeBytes)} · ` : ""}
-                        {task.sourceKind === "link" && task.status === "downloading"
-                          ? `下载 ${task.downloadPct ?? 0}% · `
-                          : ""}
-                        {timeAgo(task.createdAt)}
-                        {task.transcriptOrigin === "subtitle" ? " · 平台字幕" : ""}
-                        {task.transcriptOrigin === "asr" ? " · ASR" : ""}
-                      </p>
-                    </div>
-                    <span className={`shrink-0 font-mono text-[11px] tracking-wider ${meta.cls}`}>
-                      {task.status === "ready" ? (
-                        <Check className="mr-1 inline size-3.5" strokeWidth={1.5} />
-                      ) : null}
-                      {task.status === "queued" && queuedPosition.has(task.id)
-                        ? `排队中（第 ${queuedPosition.get(task.id)} 位）`
-                        : meta.label}
-                    </span>
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => void removeTask(task.id)}
-                    disabled={processing}
-                    title={processing ? "任务处理中，无法删除" : "删除任务"}
-                    className={`flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 font-mono text-[10px] transition-colors disabled:opacity-30 ${
-                      confirmDelete === task.id
-                        ? "border-danger/50 text-danger"
-                        : "border-transparent text-paper-faint hover:border-tint/15 hover:text-paper"
-                    }`}
-                  >
-                    {confirmDelete === task.id ? (
-                      "确认删除"
-                    ) : (
-                      <Trash2 className="size-3.5" strokeWidth={1.5} />
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
+      <Link
+        href="/studio/tasks"
+        className="mt-5 inline-flex items-center gap-2 self-start font-mono text-[11px] tracking-widest text-paper-faint transition-colors hover:text-gold"
+      >
+        <ListOrdered className="size-3.5" strokeWidth={1.5} />
+        查看全部任务
+      </Link>
 
       {dragging ? (
         <div className="pointer-events-none fixed inset-4 z-50 flex items-center justify-center rounded-3xl border-2 border-dashed border-gold/60 bg-ink-950/80 backdrop-blur-sm">
           <p className="font-display text-4xl font-semibold text-gold">松手开始上传</p>
         </div>
       ) : null}
-    </main>
+    </>
   );
 }
