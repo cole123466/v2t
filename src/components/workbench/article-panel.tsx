@@ -550,21 +550,25 @@ export function ArticlePanel({
             <SelectionPopover
               containerRef={contentRef}
               onAsk={(quote) => {
-                // 用选区起点反查所属章节与块：向上找最近的 section 根
+                // 用选区起点反查所属章节与块：向上找最近的 section 根，
+                // 途中经过块包装 div（data-block-index）时记下块序号
                 const sel = window.getSelection();
                 let el: Node | null = sel?.rangeCount
                   ? sel.getRangeAt(0).startContainer
                   : null;
-                while (el && !(el instanceof HTMLElement && el.dataset.sectionId)) {
+                let blockIndex = -1;
+                while (el) {
+                  if (el instanceof HTMLElement) {
+                    if (blockIndex < 0 && el.dataset.blockIndex !== undefined) {
+                      blockIndex = Number(el.dataset.blockIndex);
+                    }
+                    if (el.dataset.sectionId) break;
+                  }
                   el = el.parentNode;
                 }
                 const host = el as HTMLElement | null;
                 if (!host?.dataset.sectionId) return;
-                onAskSection(
-                  host.dataset.sectionId,
-                  Number(host.dataset.blockIndex ?? "-1"),
-                  quote,
-                );
+                onAskSection(host.dataset.sectionId, blockIndex, quote);
               }}
             />
           ) : null}

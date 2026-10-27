@@ -130,11 +130,16 @@ export class QaContextError extends Error {
   }
 }
 
-/** quote 核对：不要求逐字全等，容忍选区截断（前缀或包含） */
+/**
+ * quote 核对：quote 必须落在源文本之内，容忍选区截断（源的前缀）或截取中段（包含）。
+ * 不接受「源是 quote 的前缀」：那等于允许在真实摘录后面拼接任意文本注入提示词，
+ * 也是空 source（无 caption 的 figure）时任意 quote 恒通过的漏洞。
+ */
 function quoteMatches(quote: string, source: string): boolean {
   const q = quote.trim();
-  if (!q || q.length > QA_QUOTE_MAX) return false;
-  return source.includes(q) || q.startsWith(source.trim()) || source.trim().startsWith(q);
+  const s = source.trim();
+  if (!q || !s || q.length > QA_QUOTE_MAX) return false;
+  return s.includes(q) || s.startsWith(q);
 }
 
 export interface QaContextSource {

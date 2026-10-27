@@ -11,12 +11,15 @@ export function QaPanel({
   videoRef,
   pendingContext,
   onConsumeContext,
+  onRestoreContext,
 }: {
   taskId: string;
   videoRef: RefObject<HTMLVideoElement | null>;
   /** 文章选段 / 选帧等入口注入的锚点；提问时随请求带走 */
   pendingContext: QaContext | null;
   onConsumeContext: () => void;
+  /** 请求失败时归还锚点，避免选段/选帧上下文静默丢失 */
+  onRestoreContext?: (context: QaContext) => void;
 }) {
   const [messages, setMessages] = useState<QaMessage[]>([]);
   const [question, setQuestion] = useState("");
@@ -50,6 +53,11 @@ export function QaPanel({
     const text = question.trim();
     if (!text || busy) return;
     const context = pendingContext;
+    // 失败时归还锚点：请求未送达服务端（HTTP 失败 / 网络异常），
+    // 选段或选帧上下文不应被静默丢弃，用户可直接重试。
+    const restoreContext = () => {
+      if (context) onRestoreContext?.(context);
+    };
     setBusy(true);
     setError(null);
     setRequestId(null);
@@ -67,6 +75,7 @@ export function QaPanel({
         const data = (await res.json().catch(() => null)) as { error?: string } | null;
         setRequestId(res.headers.get("x-request-id"));
         setError(data?.error ?? `提问失败（${res.status}）`);
+        restoreContext();
         return;
       }
       const reader = res.body.getReader();
@@ -99,6 +108,7 @@ export function QaPanel({
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      restoreContext();
     } finally {
       setBusy(false);
       setPendingQuestion(null);

@@ -465,6 +465,7 @@ export default function TaskPage() {
                 videoRef={videoRef}
                 pendingContext={qaContext}
                 onConsumeContext={() => setQaContext(null)}
+                onRestoreContext={setQaContext}
               />
             ) : null}
             {tab === "copy" ? <PromptPanel taskId={id} taskName={task.originalName} /> : null}

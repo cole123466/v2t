@@ -45,9 +45,12 @@ export function SelectionPopover({
 
     document.addEventListener("selectionchange", onSelect);
     window.addEventListener("scroll", clear, true);
+    // resize / 图片加载等重排会让缓存坐标过期：直接清除，等下次 selectionchange 再弹
+    window.addEventListener("resize", clear);
     return () => {
       document.removeEventListener("selectionchange", onSelect);
       window.removeEventListener("scroll", clear, true);
+      window.removeEventListener("resize", clear);
     };
   }, [containerRef]);
 
@@ -55,12 +58,14 @@ export function SelectionPopover({
   return (
     <button
       type="button"
-      onMouseDown={(e) => {
-        // 阻止点击按钮时清掉 selection（虽然已捕获 quote，保持选区高亮更自然）
-        e.preventDefault();
+      onClick={() => {
         onAsk(quote);
         window.getSelection()?.removeAllRanges();
         setAnchor(null);
+      }}
+      onMouseDown={(e) => {
+        // 阻止点击按钮时清掉 selection（虽然已捕获 quote，保持选区高亮更自然）
+        e.preventDefault();
       }}
       className="absolute z-20 -translate-y-full rounded-lg border border-gold/50 bg-ink-950/95 px-2.5 py-1.5 font-mono text-[10px] tracking-wider text-gold shadow-lg shadow-black/30 transition-colors hover:bg-gold/10"
       style={{ top: anchor.top, left: anchor.left }}
