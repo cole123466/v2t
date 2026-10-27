@@ -155,3 +155,152 @@ describe("问答 lenient 引用校验", () => {
     expect(answer.limitations.join()).toContain("原有限制");
   });
 });
+
+// ---------------------------------------------------------------------------
+// 15 号票后半：语义核对（C4/C6/C7，验收 4/5/6）
+// ---------------------------------------------------------------------------
+
+const SECTION_OK = JSON.stringify({
+  id: "s1",
+  title: "第1章",
+  blocks: [{ type: "paragraph", text: "视频开场是介绍 [[t01]]，随后讲了第二个要点 [[t02]]。" }],
+});
+
+const SECTION_BAD = JSON.stringify({
+  id: "s1",
+  title: "第1章",
+  blocks: [{ type: "paragraph", text: "开场介绍了量子纠错的前沿进展 [[t01]]。" }],
+});
+
+const VERIFY_RESULTS = (verdicts: string[]) =>
+  JSON.stringify({ results: verdicts.map((verdict, i) => ({ i, verdict, reason: "r" })) });
+
+/** 核对链路的假 LLM：按 prompt 特征分流（核对/重写/章节/提纲），顺序敏感——章节 prompt 也含「提纲」字样 */
+function verifyLlm(handlers: {
+  section: () => string;
+  /** verifyCalls：第几次核对调用（1 起）；默认每次都返回同样结果 */
+  verify: (verifyCalls: number) => string;
+  rewrite?: () => string;
+}): LLMProvider {
+  let verifyCalls = 0;
+  return {
+    async generate(messages: LLMMessage[]) {
+      const text = JSON.stringify(messages);
+      if (text.includes("核对员")) {
+        verifyCalls += 1;
+        return handlers.verify(verifyCalls);
+      }
+      if (text.includes("未能支持论断")) return handlers.rewrite?.() ?? handlers.section();
+      if (text.includes("只写这一章")) return handlers.section();
+      return outlineJson(1);
+    },
+  };
+}
+
+describe("语义核对（C4/C6/C7）", () => {
+  it("验收4：unsupported 触发重写一次，重写通过则正文替换", async () => {
+    const store = new ArticleStore(db);
+    const activities = new ActivityStore(db);
+    let sectionCalls = 0;
+    let rewriteCalls = 0;
+    const llm = verifyLlm({
+      section: () => {
+        sectionCalls += 1;
+        return SECTION_BAD;
+      },
+      verify: (n) => (n === 1 ? VERIFY_RESULTS(["unsupported"]) : VERIFY_RESULTS(["supported"])),
+      rewrite: () => {
+        rewriteCalls += 1;
+        return SECTION_OK;
+      },
+    });
+    const svc = new ArticleService({ store, llm, activities });
+    const record = await svc.generate({ taskId: "t-v1", catalog: CATALOG, frameFiles: new Map() });
+    expect(record.status).toBe("done");
+    expect(sectionCalls).toBe(1); // 原始章节调用
+    expect(rewriteCalls).toBe(1); // 重写恰好一次
+    expect(JSON.stringify(record.content)).toContain("第二个要点");
+    expect(record.content?.limitations ?? []).toHaveLength(0);
+    // verify 步骤：completed，message 记录重写
+    const verifyStep = activities
+      .listForTask("t-v1")
+      .find((a) => a.kind === "verify");
+    expect(verifyStep?.status).toBe("completed");
+    expect(verifyStep?.title).toContain("第 1 章");
+    expect(verifyStep?.message).toContain("已重写");
+  });
+
+  it("验收4b：重写仍 unsupported → 正文保留 + 内联标注 + limitations", async () => {
+    const store = new ArticleStore(db);
+    const activities = new ActivityStore(db);
+    const llm = verifyLlm({
+      section: () => SECTION_BAD,
+      verify: () => VERIFY_RESULTS(["unsupported"]),
+    });
+    const svc = new ArticleService({ store, llm, activities });
+    const record = await svc.generate({ taskId: "t-v2", catalog: CATALOG, frameFiles: new Map() });
+    expect(record.status).toBe("done");
+    // 正文保留（论断句子还在），引用后带标注
+    expect(JSON.stringify(record.content)).toContain("量子纠错");
+    expect(JSON.stringify(record.content)).toContain("出处未核实");
+    const limitationTexts = (record.content?.limitations ?? []).map((l) => l.text).join();
+    expect(limitationTexts).toContain("第 1 章");
+    expect(limitationTexts).toContain("未能在原文中找到直接支持");
+    const verifyStep = activities.listForTask("t-v2").find((a) => a.kind === "verify");
+    expect(verifyStep?.status).toBe("completed");
+    expect(verifyStep?.message).toContain("已标注");
+  });
+
+  it("验收5：verify 步骤落库且 title 含章节号、message 与结论一致", async () => {
+    const store = new ArticleStore(db);
+    const activities = new ActivityStore(db);
+    const llm = verifyLlm({
+      section: () => SECTION_OK,
+      verify: () => VERIFY_RESULTS(["supported", "supported"]),
+    });
+    const svc = new ArticleService({ store, llm, activities });
+    await svc.generate({ taskId: "t-v3", catalog: CATALOG, frameFiles: new Map() });
+    const verifyStep = activities.listForTask("t-v3").find((a) => a.kind === "verify");
+    expect(verifyStep?.status).toBe("completed");
+    expect(verifyStep?.title).toBe("核对第 1 章引用");
+    expect(verifyStep?.message).toContain("2 处引用全部支持");
+    expect(verifyStep?.phase).toBe("write");
+  });
+
+  it("验收6：核对调用抛错 → 步骤 failed，文章仍发布（质量增强不阻塞）", async () => {
+    const store = new ArticleStore(db);
+    const activities = new ActivityStore(db);
+    const llm = verifyLlm({
+      section: () => SECTION_OK,
+      verify: () => {
+        throw new Error("模型服务超时");
+      },
+    });
+    const svc = new ArticleService({ store, llm, activities });
+    const record = await svc.generate({ taskId: "t-v4", catalog: CATALOG, frameFiles: new Map() });
+    expect(record.status).toBe("done");
+    const verifyStep = activities.listForTask("t-v4").find((a) => a.kind === "verify");
+    expect(verifyStep?.status).toBe("failed");
+    expect(verifyStep?.message).toContain("模型服务超时");
+  });
+
+  it("无引用的章节只核对一次调用都省掉（步骤 completed，无 unsupported）", async () => {
+    const store = new ArticleStore(db);
+    const activities = new ActivityStore(db);
+    const llm = verifyLlm({
+      section: () =>
+        JSON.stringify({
+          id: "s1",
+          title: "第1章",
+          blocks: [{ type: "paragraph", text: "本章没有任何引用标记。" }],
+        }),
+      verify: () => VERIFY_RESULTS([]),
+    });
+    const svc = new ArticleService({ store, llm, activities });
+    const record = await svc.generate({ taskId: "t-v5", catalog: CATALOG, frameFiles: new Map() });
+    expect(record.status).toBe("done");
+    const verifyStep = activities.listForTask("t-v5").find((a) => a.kind === "verify");
+    expect(verifyStep?.status).toBe("completed");
+    expect(verifyStep?.message).toContain("没有需要核对");
+  });
+});
