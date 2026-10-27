@@ -1,17 +1,22 @@
 "use client";
 
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { Loader, MessageCircleQuestion, Send, X } from "lucide-react";
-import type { QaMessage } from "@/server/qa";
+import { Image as ImageIcon, Loader, MessageCircleQuestion, Send, Type, X } from "lucide-react";
+import type { QaContext, QaMessage } from "@/server/qa";
 import { clock } from "@/lib/time";
 import { RequestIdLine } from "./request-id";
 
 export function QaPanel({
   taskId,
   videoRef,
+  pendingContext,
+  onConsumeContext,
 }: {
   taskId: string;
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** 文章选段 / 选帧等入口注入的锚点；提问时随请求带走 */
+  pendingContext: QaContext | null;
+  onConsumeContext: () => void;
 }) {
   const [messages, setMessages] = useState<QaMessage[]>([]);
   const [question, setQuestion] = useState("");
@@ -44,17 +49,19 @@ export function QaPanel({
   const ask = async () => {
     const text = question.trim();
     if (!text || busy) return;
+    const context = pendingContext;
     setBusy(true);
     setError(null);
     setRequestId(null);
     setPendingQuestion(text);
     setStreamText("");
     setQuestion("");
+    onConsumeContext();
     try {
       const res = await fetch(`/api/tasks/${taskId}/qa`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ question: text }),
+        body: JSON.stringify({ question: text, context: context ?? undefined }),
       });
       if (!res.ok || !res.body) {
         const data = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -189,6 +196,30 @@ export function QaPanel({
       </div>
 
       <div className="shrink-0 border-t border-tint/5 p-3">
+        {pendingContext ? (
+          <div className="mb-2 flex items-center gap-1.5">
+            <span className="inline-flex max-w-full items-center gap-1 rounded-md border border-gold/30 bg-gold/10 px-1.5 py-0.5 font-mono text-[10px] text-gold">
+              {pendingContext.kind === "frame" ? (
+                <ImageIcon className="size-3 shrink-0" strokeWidth={1.5} />
+              ) : (
+                <Type className="size-3 shrink-0" strokeWidth={1.5} />
+              )}
+              <span className="truncate">
+                {pendingContext.kind === "frame"
+                  ? pendingContext.frameId.toUpperCase()
+                  : pendingContext.quote.slice(0, 18)}
+              </span>
+              <button
+                type="button"
+                onClick={onConsumeContext}
+                className="shrink-0 text-gold/70 transition-colors hover:text-gold"
+                title="移除锚点"
+              >
+                <X className="size-3" strokeWidth={1.5} />
+              </button>
+            </span>
+          </div>
+        ) : null}
         <div className="flex items-end gap-2">
           <textarea
             value={question}

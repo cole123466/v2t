@@ -1,10 +1,13 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import type { Transcript } from "@/server/asr";
 import { taskDir, transcriptPath } from "@/server/paths";
+import { readFrameManifest } from "@/server/frames";
 import { getRuntime } from "@/server/runtime";
 import { errorFields, logError } from "@/server/log";
 import { requestId } from "@/server/request";
 import { deviceOwner } from "@/server/owner";
+import { QaContextError, validateQaContext, type QaContext } from "@/server/qa";
 
 
 export const runtime = "nodejs";
@@ -29,7 +32,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return Response.json({ error: "任务尚未转写完成" }, { status: 409 });
   }
 
-  const body = (await req.json().catch(() => null)) as { question?: string } | null;
+  const body = (await req.json().catch(() => null)) as {
+    question?: string;
+    context?: QaContext;
+  } | null;
   const question = body?.question?.trim() ?? "";
   if (!question) return Response.json({ error: "缺少 question" }, { status: 400 });
   if (question.length > MAX_QUESTION) {
@@ -43,6 +49,41 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     ) as Transcript;
   } catch {
     return Response.json({ error: "转录稿缺失" }, { status: 409 });
+  }
+
+  // 锚点校验（09 号票）：白名单外 422，DB 不落脏行
+  const context = body?.context ?? null;
+  let contextImage: string | null = null;
+  if (context) {
+    const manifest = await readFrameManifest(taskDir(rt.dataDir, id));
+    const article = rt.articles.listForTask(id).find((a) => a.content) ?? null;
+    try {
+      validateQaContext(context, {
+        article: article?.content ?? null,
+        transcript,
+        frameIds: new Set((manifest?.frames ?? []).map((f) => f.id)),
+      });
+    } catch (err) {
+      if (err instanceof QaContextError) {
+        return Response.json({ error: err.message, field: err.field }, { status: 422 });
+      }
+      throw err;
+    }
+    // 单帧注入：读帧文件转 dataURL（帧被清理时按无图降级？不——校验基于清单，
+    // 清单在而文件缺失属于异常，仍 422 拒绝，避免交付无证据回答）
+    if (context.kind === "frame") {
+      const frame = manifest?.frames.find((f) => f.id === context.frameId);
+      const bytes = frame
+        ? await readFile(path.join(taskDir(rt.dataDir, id), frame.file)).catch(() => null)
+        : null;
+      if (!bytes) {
+        return Response.json(
+          { error: "画面文件缺失，无法就该帧回答", field: "context.frameId" },
+          { status: 422 },
+        );
+      }
+      contextImage = `data:image/jpeg;base64,${bytes.toString("base64")}`;
+    }
   }
 
   const encoder = new TextEncoder();
@@ -69,6 +110,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           traceId,
           transcript,
           question,
+          context: context ?? undefined,
+          contextImage,
           onDelta: (delta) => send("delta", { delta }),
         });
         rt.activities.finish(activity.id, {

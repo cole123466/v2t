@@ -15,6 +15,7 @@ import {
 import type { MindMapNode } from "@/server/article";
 import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
 import { ArticleBlockView, InlineText } from "./article-block";
+import { SelectionPopover } from "./selection-popover";
 import { RequestIdLine } from "./request-id";
 import { petFlow } from "@/components/pet/pet-flow";
 
@@ -75,9 +76,15 @@ function MindMapTree({
 export function ArticlePanel({
   taskId,
   videoRef,
+  onAskSection,
+  onAskFrame,
 }: {
   taskId: string;
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** 文章选段追问（09 号票 P1）：quote 已由 SelectionPopover 捕获 */
+  onAskSection?: (sectionId: string, blockIndex: number, quote: string) => void;
+  /** figure「问这张画面」（P2） */
+  onAskFrame?: (frameId: string) => void;
 }) {
   const [articles, setArticles] = useState<ArticleRecord[]>([]);
   const [busy, setBusy] = useState(false);
@@ -90,6 +97,8 @@ export function ArticlePanel({
   const [purpose, setPurpose] = useState("");
   const [citationTimes, setCitationTimes] = useState<Map<string, number>>(new Map());
   const [exporting, setExporting] = useState<"md" | "zip" | "html" | "pdf" | null>(null);
+  // 选区浮层的定位容器：文章正文滚动区
+  const contentRef = useRef<HTMLDivElement>(null);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
   const abortRef = useRef<AbortController | null>(null);
 
@@ -536,7 +545,29 @@ export function ArticlePanel({
       ) : null}
 
       {active?.content ? (
-        <div className="glass min-h-0 flex-1 overflow-auto rounded-2xl p-6">
+        <div ref={contentRef} className="glass relative min-h-0 flex-1 overflow-auto rounded-2xl p-6">
+          {onAskSection ? (
+            <SelectionPopover
+              containerRef={contentRef}
+              onAsk={(quote) => {
+                // 用选区起点反查所属章节与块：向上找最近的 section 根
+                const sel = window.getSelection();
+                let el: Node | null = sel?.rangeCount
+                  ? sel.getRangeAt(0).startContainer
+                  : null;
+                while (el && !(el instanceof HTMLElement && el.dataset.sectionId)) {
+                  el = el.parentNode;
+                }
+                const host = el as HTMLElement | null;
+                if (!host?.dataset.sectionId) return;
+                onAskSection(
+                  host.dataset.sectionId,
+                  Number(host.dataset.blockIndex ?? "-1"),
+                  quote,
+                );
+              }}
+            />
+          ) : null}
           {/* 正文限宽：过宽的行长会让阅读跳行，正文区在宽屏下居中 */}
           <div className="mx-auto w-full max-w-[44rem]">
           {active.status === "streaming" ? (
@@ -575,6 +606,7 @@ export function ArticlePanel({
               <section
                 key={section.id}
                 id={`section-${section.id}`}
+                data-section-id={section.id}
                 className={`scroll-mt-4 ${index > 0 ? "border-t border-tint/[0.07] pt-8" : ""}`}
               >
                 <h3 className="flex items-baseline gap-2.5 font-display text-[19px] font-semibold leading-snug text-paper">
@@ -585,13 +617,15 @@ export function ArticlePanel({
                 </h3>
                 <div className="mt-3 space-y-3.5">
                   {section.blocks.map((block, i) => (
-                    <ArticleBlockView
-                      key={i}
-                      taskId={taskId}
-                      block={block}
-                      times={citationTimes}
-                      onSeek={seek}
-                    />
+                    <div key={i} data-block-index={i} data-block-type={block.type}>
+                      <ArticleBlockView
+                        taskId={taskId}
+                        block={block}
+                        times={citationTimes}
+                        onSeek={seek}
+                        onAskFrame={onAskFrame}
+                      />
+                    </div>
                   ))}
                 </div>
               </section>
