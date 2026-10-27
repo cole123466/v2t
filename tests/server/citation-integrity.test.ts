@@ -181,8 +181,9 @@ function verifyLlm(handlers: {
   /** verifyCalls：第几次核对调用（1 起）；默认每次都返回同样结果 */
   verify: (verifyCalls: number) => string;
   rewrite?: () => string;
-}): LLMProvider {
+}): LLMProvider & { verifyCalls: () => number; rewriteCalls: () => number } {
   let verifyCalls = 0;
+  let rewriteCalls = 0;
   return {
     async generate(messages: LLMMessage[]) {
       const text = JSON.stringify(messages);
@@ -190,10 +191,15 @@ function verifyLlm(handlers: {
         verifyCalls += 1;
         return handlers.verify(verifyCalls);
       }
-      if (text.includes("未能支持论断")) return handlers.rewrite?.() ?? handlers.section();
+      if (text.includes("未能支持论断")) {
+        rewriteCalls += 1;
+        return handlers.rewrite?.() ?? handlers.section();
+      }
       if (text.includes("只写这一章")) return handlers.section();
       return outlineJson(1);
     },
+    verifyCalls: () => verifyCalls,
+    rewriteCalls: () => rewriteCalls,
   };
 }
 
@@ -240,6 +246,9 @@ describe("语义核对（C4/C6/C7）", () => {
     const svc = new ArticleService({ store, llm, activities });
     const record = await svc.generate({ taskId: "t-v2", catalog: CATALOG, frameFiles: new Map() });
     expect(record.status).toBe("done");
+    // 核对恰好 2 次（原章 + 重写后各 1 次），重写恰好 1 次——不多不少
+    expect(llm.verifyCalls()).toBe(2);
+    expect(llm.rewriteCalls()).toBe(1);
     // 正文保留（论断句子还在），引用后带标注
     expect(JSON.stringify(record.content)).toContain("量子纠错");
     expect(JSON.stringify(record.content)).toContain("出处未核实");
@@ -299,6 +308,8 @@ describe("语义核对（C4/C6/C7）", () => {
     const svc = new ArticleService({ store, llm, activities });
     const record = await svc.generate({ taskId: "t-v5", catalog: CATALOG, frameFiles: new Map() });
     expect(record.status).toBe("done");
+    // 无引用 → 核对调用本身必须被省掉，而不是发一次调用返回空结果
+    expect(llm.verifyCalls()).toBe(0);
     const verifyStep = activities.listForTask("t-v5").find((a) => a.kind === "verify");
     expect(verifyStep?.status).toBe("completed");
     expect(verifyStep?.message).toContain("没有需要核对");

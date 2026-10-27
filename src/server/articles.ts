@@ -24,6 +24,7 @@ import {
   parseVerifyResults,
   unverifiedLimitation,
   verifyPrompt,
+  type VerifyPair,
   type VerifyResult,
 } from "@/lib/semantic";
 
@@ -716,23 +717,28 @@ export class ArticleService {
                 mindMap: [],
                 limitations: [],
               });
+              // 重写没有产出可用正文（缺 blocks 字段 / 空数组）时按核对失败处理，
+              // 调用方 catch 后保留原章节——绝不让重写把整章清空
+              if (normalized.sections[0].blocks.length === 0) {
+                throw new Error("重写结果没有正文内容");
+              }
               return normalized.sections[0].blocks;
             },
           });
           if (outcome.unsupported.length > 0) {
             // 重写仍不过 → 保留正文，内联标注 + limitations（C6 底线：绝不丢内容）
-            const marked = annotateUnsupported(outcome.blocks, outcome.unsupported);
+            const marked = annotateUnsupported(
+              outcome.blocks,
+              outcome.unsupported.map((u) => u.token),
+            );
             sections[sections.length - 1] = {
               id: section.id,
               title: parsed.title?.trim() || section.title,
               blocks: marked.blocks,
             };
             verifyLimitations.push(
-              ...outcome.unsupported.map((token): Article["limitations"][number] => ({
-                text: unverifiedLimitation(
-                  i + 1,
-                  outcome.pairs.find((p) => p.token === token)?.claim ?? token,
-                ),
+              ...outcome.unsupported.map((u): Article["limitations"][number] => ({
+                text: unverifiedLimitation(i + 1, u.claim),
               })),
             );
             verifyNote = `已保留正文并标注：${outcome.note}`;
@@ -746,20 +752,6 @@ export class ArticleService {
             verifyNote = outcome.note;
           } else {
             verifyNote = outcome.note;
-          }
-          if (
-            outcome.unsupported.length > 0 ||
-            outcome.blocks !== parsedBlocks
-          ) {
-            this.opts.store.update(record.id, {
-              content: normalizeArticle({
-                title: outline.title,
-                sections: [...sections],
-                mindMap: outline.mindMap,
-                limitations: [],
-              }),
-              status: "streaming",
-            });
           }
           steps?.finish(verifyStep!.id, { ok: true, status: "completed", message: verifyNote });
         } catch (err) {
@@ -908,13 +900,13 @@ export class ArticleService {
     onUnsupported: (failed: VerifyResult[]) => Promise<ArticleSection["blocks"]>;
   }): Promise<{
     note: string;
-    unsupported: string[];
-    pairs: ReturnType<typeof collectVerifyPairs>;
+    /** 未支持的「编号 ↔ 论断」对（基于重写后正文重新抽取，标注与 limitation 用） */
+    unsupported: VerifyPair[];
     blocks: ArticleSection["blocks"];
   }> {
     const pairs = collectVerifyPairs({ blocks: input.blocks }, input.catalog);
     if (pairs.length === 0) {
-      return { note: "本章没有需要核对的引用", unsupported: [], pairs, blocks: input.blocks };
+      return { note: "本章没有需要核对的引用", unsupported: [], blocks: input.blocks };
     }
     const judge = async (currentBlocks: ArticleSection["blocks"]): Promise<VerifyResult[]> => {
       const currentPairs = collectVerifyPairs({ blocks: currentBlocks }, input.catalog);
@@ -946,13 +938,15 @@ export class ArticleService {
           `${pairs.length} 处引用全部支持` +
           (partial.length > 0 ? `（${partial.length} 处为部分支持）` : ""),
         unsupported: [],
-        pairs,
         blocks: input.blocks,
       };
     }
 
     // C6：重写该章一次
     const rewrittenBlocks = await input.onUnsupported(failed);
+    // 未支持条目按重写后正文重新抽取：重写可能增删/替换引用编号，
+    // 不能拿原始 pairs 的索引去映射，否则会标注错位
+    const rewrittenPairs = collectVerifyPairs({ blocks: rewrittenBlocks }, input.catalog);
     const retryResults = await judge(rewrittenBlocks);
     const stillFailed = retryResults.filter((r) => r.verdict === "unsupported");
     if (stillFailed.length === 0) {
@@ -960,16 +954,14 @@ export class ArticleService {
       return {
         note: `${failed.length} 处未支持，已重写${partial.length > 0 ? `（${partial.length} 处为部分支持）` : ""}`,
         unsupported: [],
-        pairs,
         blocks: rewrittenBlocks,
       };
     }
     return {
       note: `${stillFailed.length} 处未支持，已标注`,
-      unsupported: Array.from(
-        new Set(pairs.filter((_, idx) => stillFailed.some((r) => r.index === idx)).map((p) => p.token)),
+      unsupported: rewrittenPairs.filter((_, idx) =>
+        stillFailed.some((r) => r.index === idx),
       ),
-      pairs,
       blocks: rewrittenBlocks,
     };
   }

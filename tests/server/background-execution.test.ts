@@ -243,7 +243,8 @@ describe("08 号票：后台执行", () => {
       () => {},
     );
     expect(sectionCalls).toBe(1); // 只补了第 2 章（语义核对调用已分流给 verifyCalls）
-    expect(verifyCalls).toBeGreaterThanOrEqual(0); // 核对失败/跳过都不影响 resume 语义
+    // 核对恰好 1 次：只补的 s2 有 [[t01]] 引用需要核对，s1 跳过不再核对
+    expect(verifyCalls).toBe(1);
     const after = h.articles.get(record.id)!;
     expect(after.status).toBe("done");
     expect(after.content?.sections).toHaveLength(2);
