@@ -35,6 +35,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (task.mediaPurgedAt) {
     return Response.json({ error: "媒体已清理，无法生成图文文章" }, { status: 409 });
   }
+  // 并发保护：本任务已有生成中的文章时不接受第二次提交（07 号票 D3）
+  if (rt.articles.listForTask(id).some((a) => a.status === "streaming")) {
+    return Response.json({ error: "已有生成任务在进行中" }, { status: 409 });
+  }
 
   const body = (await req.json().catch(() => ({}))) as {
     detailLevel?: string;

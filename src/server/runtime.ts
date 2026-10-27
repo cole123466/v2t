@@ -84,9 +84,11 @@ export function getRuntime(): Runtime {
     const llm = createOpenAiCompatibleLlm();
     const generationService = new GenerationService({ store: generations, llm });
     const articles = new ArticleStore(db);
+    const activities = new ActivityStore(db);
     const articleService = new ArticleService({
       store: articles,
       llm,
+      activities,
       readFrame: async (file) => {
         const { readFile } = await import("node:fs/promises");
         const bytes = await readFile(file).catch(() => null);
@@ -94,7 +96,6 @@ export function getRuntime(): Runtime {
         return `data:image/jpeg;base64,${bytes.toString("base64")}`;
       },
     });
-    const activities = new ActivityStore(db);
     const qa = new QaStore(db);
     const qaService = new QaService({ store: qa, llm });
     const runtime: Runtime = {

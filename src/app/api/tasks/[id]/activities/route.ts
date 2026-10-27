@@ -9,5 +9,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const { id } = await params;
   const rt = getRuntime();
   if (!rt.store.getOwned(id, deviceOwner(req))) return Response.json({ error: "任务不存在" }, { status: 404 });
-  return Response.json({ activities: rt.activities.listForTask(id) });
+  return Response.json({
+    activities: rt.activities.listForTask(id),
+    currentRun: rt.activities.currentRunForTask(id),
+  });
 }

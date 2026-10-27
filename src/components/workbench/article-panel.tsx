@@ -128,7 +128,11 @@ export function ArticlePanel({
       });
   }, [taskId]);
 
-  const active = articles.find((a) => a.id === selected) ?? articles.find((a) => a.status === "done");
+  // 生成中的文章也作为展示对象：部分 content 落库后刷新页面能直接看到已生成章节
+  const active =
+    articles.find((a) => a.id === selected) ??
+    articles.find((a) => a.status === "done") ??
+    articles.find((a) => a.status === "streaming");
 
   const seek = (t: number) => {
     const video = videoRef.current;
@@ -425,6 +429,12 @@ export function ArticlePanel({
         <div className="glass min-h-0 flex-1 overflow-auto rounded-2xl p-6">
           {/* 正文限宽：过宽的行长会让阅读跳行，正文区在宽屏下居中 */}
           <div className="mx-auto w-full max-w-[44rem]">
+          {active.status === "streaming" ? (
+            <p className="mb-4 flex items-center gap-2 rounded-xl border border-gold/20 bg-gold/5 px-3 py-2 font-mono text-[10px] tracking-wider text-gold/90">
+              <Loader className="size-3 animate-spin" strokeWidth={1.5} />
+              生成中 · {active.content.sections.length} 章已完成
+            </p>
+          ) : null}
           <h2 className="font-display text-2xl font-semibold leading-snug text-paper">
             {active.content.title}
           </h2>

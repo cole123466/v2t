@@ -26,7 +26,11 @@ function params(id = "task-1") {
 }
 
 function activities() {
-  return { start: vi.fn(() => ({ id: "activity-1" })), finish: vi.fn() };
+  return {
+    start: vi.fn(() => ({ id: "activity-1" })),
+    finish: vi.fn(),
+    newRunId: vi.fn(() => "run-1"),
+  };
 }
 
 function errorEvent(text: string): Record<string, unknown> | null {
@@ -101,6 +105,7 @@ describe("SSE 错误事件携带 request_id", () => {
       store: { getOwned: () => ({ id: "task-1", status: "ready", mediaPurgedAt: null }) },
       dataDir: "/tmp/v2t-test",
       activities: activities(),
+      articles: { listForTask: () => [] },
       articleService: {
         generate: async () => {
           throw new Error("模拟文章失败");

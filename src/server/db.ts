@@ -82,6 +82,22 @@ const COLUMNS: Array<{ table: string; column: string; ddl: string }> = [
   { table: "tasks", column: "source_notice", ddl: "TEXT" },
   // 设备归属：空串是加隔离之前的历史任务
   { table: "tasks", column: "owner", ddl: "TEXT NOT NULL DEFAULT ''" },
+  // 07 号票（decision-progress-model）：步骤模型——run / seq / phase / title / status 等
+  { table: "activities", column: "run_id", ddl: "TEXT" },
+  { table: "activities", column: "seq", ddl: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "activities", column: "phase", ddl: "TEXT" },
+  { table: "activities", column: "title", ddl: "TEXT" },
+  { table: "activities", column: "status", ddl: "TEXT" },
+  { table: "activities", column: "parent_id", ddl: "TEXT" },
+  { table: "activities", column: "attempt_no", ddl: "INTEGER NOT NULL DEFAULT 1" },
+  { table: "activities", column: "article_id", ddl: "TEXT" },
+  { table: "activities", column: "usage_json", ddl: "TEXT" },
+];
+
+/** 追加索引（幂等） */
+const INDEXES = [
+  "CREATE INDEX IF NOT EXISTS activities_run ON activities(run_id, seq)",
+  "CREATE INDEX IF NOT EXISTS activities_task_run ON activities(task_id, run_id)",
 ];
 
 export function openDb(file: string): Db {
@@ -95,5 +111,6 @@ export function openDb(file: string): Db {
       .get(table, column);
     if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
   }
+  for (const sql of INDEXES) db.exec(sql);
   return db;
 }
