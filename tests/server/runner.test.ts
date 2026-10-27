@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { openDb, type Db } from "@/server/db";
+import { ActivityStore } from "@/server/activities";
 import { TaskRunner } from "@/server/runner";
 import { TaskStore, type Task } from "@/server/tasks";
 
@@ -157,5 +158,84 @@ describe("TaskRunner（Seam A · 串行管线）", () => {
     expect(order).toEqual(["a", "b"]);
     expect(store.get(a.id)?.status).toBe("ready");
     expect(store.get(b.id)?.status).toBe("ready");
+  });
+});
+
+describe("TaskRunner · 来源步骤（kind='source'，decision-input-ops I2）", () => {
+  it("上传任务：字幕回退路径按 subtitles → asr → frames 落步骤，转写分段更新 message", async () => {
+    const activities = new ActivityStore(db);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    let secondStarted: () => void = () => {};
+    const secondCall = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    // chunkSeconds=1：2s 的 fixture 切 2 段；第 2 段卡住，观察中间态 message
+    const stepRunner = new TaskRunner({
+      store,
+      dataDir: dir,
+      activities,
+      chunkSeconds: 1,
+      asr: {
+        async transcribe() {
+          calls += 1;
+          if (calls === 2) {
+            secondStarted();
+            await gate;
+          }
+          return { segments: [{ start: 0, end: 1, text: "假转写" }], timestampsMissing: false };
+        },
+      },
+    });
+
+    const task = await makeTask("steps.mp4", fixture);
+    stepRunner.enqueue(task.id);
+    await secondCall;
+
+    const mid = activities.listForTask(task.id).filter((a) => a.kind === "source");
+    const midAsr = mid.find((a) => a.phase === "asr");
+    expect(midAsr?.status).toBe("running");
+    expect(midAsr?.message).toBe("转写 2/2 段");
+
+    release();
+    await stepRunner.whenIdle();
+
+    const source = activities.listForTask(task.id).filter((a) => a.kind === "source");
+    // 上传任务没有下载阶段；run_id 留空（转写走 runner 不走 jobs）
+    expect(source.map((s) => s.phase)).toEqual(["subtitles", "asr", "frames"]);
+    expect(source.every((s) => s.runId === null)).toBe(true);
+    expect(source.every((s) => s.status === "completed")).toBe(true);
+    expect(source[0].title).toBe("提取字幕");
+    expect(source[0].message).toMatch(/无可用字幕/);
+    expect(source[1].title).toBe("语音转写");
+    expect(source[1].message).toMatch(/转录稿 \d+ 段/);
+    expect(source[2].title).toBe("抽取画面");
+  });
+
+  it("转写失败：进行中的 source 步骤标 failed 并带错误信息，后续阶段不落步骤", async () => {
+    const activities = new ActivityStore(db);
+    const boom = new TaskRunner({
+      store,
+      dataDir: dir,
+      activities,
+      asr: {
+        async transcribe() {
+          throw new Error("ASR 炸了");
+        },
+      },
+    });
+    const task = await makeTask("boom.mp4", fixture);
+    boom.enqueue(task.id);
+    await boom.whenIdle();
+
+    expect(store.get(task.id)?.status).toBe("failed");
+    const source = activities.listForTask(task.id).filter((a) => a.kind === "source");
+    const asrStep = source.find((a) => a.phase === "asr");
+    expect(asrStep?.status).toBe("failed");
+    expect(asrStep?.message).toBe("ASR 炸了");
+    expect(source.find((a) => a.phase === "frames")).toBeUndefined();
   });
 });

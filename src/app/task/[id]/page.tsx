@@ -27,6 +27,7 @@ import { PromptPanel } from "@/components/workbench/prompt-panel";
 import { ArticlePanel } from "@/components/workbench/article-panel";
 import { QaPanel } from "@/components/workbench/qa-panel";
 import { ProcessPanel } from "@/components/workbench/process-panel";
+import { SourceProgress } from "@/components/workbench/source-progress";
 import { WaveBars } from "@/components/landing/wave-bars";
 import { SourceNotice } from "@/components/workbench/source-notice";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -274,15 +275,9 @@ export default function TaskPage() {
             })}
           </div>
 
-          <div>
-            <div className="h-1 overflow-hidden rounded-full bg-tint/10">
-              <div
-                className="h-full rounded-full bg-gold transition-all duration-500"
-                style={{ width: `${task.progress}%` }}
-              />
-            </div>
-            <p className="mt-3 text-right font-mono text-[11px] text-paper-faint">{task.progress}%</p>
-          </div>
+          {/* 阶段条 + 步骤列表：来自 runner 写入的 kind='source' 步骤，
+              替代原百分比条（decision-input-ops I2） */}
+          <SourceProgress taskId={id} showDownload={task.sourceKind === "link"} />
 
           <p className="text-center font-mono text-[11px] tracking-widest text-paper-faint">
             {statusHint(task)}

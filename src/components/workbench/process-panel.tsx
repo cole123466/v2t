@@ -88,7 +88,7 @@ export function ProcessPanel({ taskId }: { taskId: string }) {
                 </span>
                 <div className="flex items-baseline justify-between gap-3">
                   <p className="text-xs text-paper-dim">
-                    {STAGE_LABEL[a.stage ?? ""] ?? a.stage ?? a.kind}
+                    {a.title ?? STAGE_LABEL[a.stage ?? ""] ?? a.stage ?? a.kind}
                   </p>
                   <span className="shrink-0 font-mono text-[10px] text-paper-faint">
                     {duration(a)}

@@ -9,6 +9,7 @@ import {
 } from "./subtitle";
 import { audioPath, sourcePath, taskDir, transcriptPath } from "./paths";
 import { extractOverviewFrames } from "./frames";
+import type { ActivityStore } from "./activities";
 import type { SourceProvider } from "./source";
 import type { Task, TaskPatch, TaskStore } from "./tasks";
 import { elapsedMs, errorFields, logError, logInfo, logWarn } from "./log";
@@ -27,6 +28,12 @@ export interface RunnerOptions {
   overviewFrames?: number;
   /** 同时等待处理的任务上限（不含正在处理的那个），默认 3 */
   queueLimit?: number;
+  /**
+   * 来源步骤落库（kind='source'，decision-input-ops I2）：每次状态流转
+   * 写 activities 一步，任务页阶段条与「过程」面板直接读取。
+   * 省略时（部分测试）不落步骤。
+   */
+  activities?: ActivityStore;
 }
 
 /**
@@ -165,6 +172,23 @@ export class TaskRunner {
       source_kind: task.sourceKind,
       ext: task.ext,
     });
+    // 来源步骤（kind='source'）：与状态流转一一对应，run_id 留空（转写走
+    // runner 不走 jobs，见 decision-input-ops I2）。串行管线同一时刻只有
+    // 一步在进行，用单个游标即可；失败时把游标上的步骤标 failed。
+    const steps = this.opts.activities;
+    let activeStep: string | null = null;
+    const startStep = (phase: "download" | "subtitles" | "asr" | "frames", title: string): void => {
+      if (!steps) return;
+      const a = steps.start({ taskId, kind: "source", phase, title });
+      activeStep = a.id;
+    };
+    const stepMessage = (message: string): void => {
+      if (steps && activeStep) steps.updateStatus(activeStep, "running", message);
+    };
+    const finishStep = (ok: boolean, message?: string): void => {
+      if (steps && activeStep) steps.finish(activeStep, { ok, message: message ?? null });
+      activeStep = null;
+    };
     try {
       let ext = task.ext;
 
@@ -173,6 +197,7 @@ export class TaskRunner {
         if (!this.opts.source) throw new Error("未配置下载器");
         if (!task.sourceUrl) throw new Error("链接任务缺少来源地址");
         this.patch(taskId, { status: "downloading", progress: 5, downloadPct: 0 });
+        startStep("download", "下载来源");
         const downloadAt = Date.now();
         await mkdir(dir, { recursive: true });
         const media = await this.opts.source.fetch(task.sourceUrl, dir, (p) => {
@@ -182,11 +207,13 @@ export class TaskRunner {
             downloadPct: Math.min(99, pct),
             progress: 5 + Math.round(pct * 0.15),
           });
+          stepMessage(`已下载 ${Math.min(99, pct)}%`);
         });
         ext = media.ext;
         // 下载器产出 media.<ext>，统一改名为管线的 source.<ext>
         const target = sourcePath(dir, ext);
         if (media.file !== target) await rename(media.file, target);
+        finishStep(true, `${(media.sizeBytes / 1024 / 1024).toFixed(1)} MB`);
         this.patch(taskId, {
           ext,
           sizeBytes: media.sizeBytes,
@@ -216,9 +243,11 @@ export class TaskRunner {
 
       // 阶段 2：字幕优先（容器内字幕轨道），不可用则 ASR 兜底
       this.patch(taskId, { status: "fetching-subtitles", progress: 30 });
+      startStep("subtitles", "提取字幕");
       const cues = await this.trySubtitles(source, dir);
 
       if (cues) {
+        finishStep(true, `容器内字幕 ${cues.length} 段`);
         const segments: TranscriptSegment[] = cues.map((c) => ({
           start: c.start,
           end: c.end,
@@ -233,8 +262,11 @@ export class TaskRunner {
         this.patch(taskId, { status: "extracting-frames", progress: 88, transcriptOrigin: "subtitle" });
       } else {
         logInfo("subtitle track unavailable; falling back to asr", { task_id: taskId });
+        finishStep(true, "无可用字幕，回退语音转写");
         const audio = audioPath(dir);
         this.patch(taskId, { status: "extracting", progress: 35 });
+        startStep("asr", "语音转写");
+        stepMessage("抽取 16kHz 单声道音频");
         await extractAudio(source, audio);
 
         const chunkSeconds = this.opts.chunkSeconds ?? DEFAULT_CHUNK_SECONDS;
@@ -252,6 +284,7 @@ export class TaskRunner {
           for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
             const chunkAt = Date.now();
+            stepMessage(`转写 ${i + 1}/${chunks.length} 段`);
             const part = await this.opts.asr.transcribe(chunk.file);
             logInfo("asr chunk completed", {
               task_id: taskId,
@@ -284,6 +317,7 @@ export class TaskRunner {
 
         segments.sort((a, b) => a.start - b.start);
         await this.writeTranscript(dir, info.durationSec, segments, language, timestampsMissing);
+        finishStep(true, `转录稿 ${segments.length} 段`);
         logInfo("transcript ready", {
           task_id: taskId,
           origin: "asr",
@@ -295,6 +329,7 @@ export class TaskRunner {
       }
 
       // 阶段 3：全景帧（失败不阻塞就绪——抽帧只影响文章与画面问答）
+      startStep("frames", "抽取画面");
       const framesAt = Date.now();
       try {
         await extractOverviewFrames(
@@ -303,11 +338,13 @@ export class TaskRunner {
           info.durationSec,
           this.opts.overviewFrames ?? DEFAULT_OVERVIEW_FRAMES,
         );
+        finishStep(true);
         logInfo("overview frames ready", {
           task_id: taskId,
           duration_ms: elapsedMs(framesAt),
         });
       } catch (err) {
+        finishStep(false, "抽帧失败：图文与画面问答不可用");
         logWarn("overview frame extraction failed", {
           task_id: taskId,
           ...errorFields(err),
@@ -319,6 +356,7 @@ export class TaskRunner {
       logInfo("task ready", { task_id: taskId, duration_ms: elapsedMs(startedAt) });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      finishStep(false, message);
       this.patch(taskId, { status: "failed", error: message });
       logError("task failed", {
         task_id: taskId,

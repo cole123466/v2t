@@ -12,7 +12,21 @@ import { bind, row as one, rows as many } from "./sql";
  * - 阶段（phase）：outline → write → validate → publish；问答为 qa。
  */
 export type StepStatus = "queued" | "running" | "completed" | "failed" | "canceled";
-export type StepPhase = "outline" | "write" | "validate" | "publish" | "qa";
+/**
+ * 阶段取值：outline → write → validate → publish 为文章 run；qa 为问答；
+ * download → subtitles → asr → frames 为来源管线（runner 写入，kind='source'，
+ * 无 run_id——见 decision-input-ops I2）。
+ */
+export type StepPhase =
+  | "outline"
+  | "write"
+  | "validate"
+  | "publish"
+  | "qa"
+  | "download"
+  | "subtitles"
+  | "asr"
+  | "frames";
 
 export interface Activity {
   id: string;

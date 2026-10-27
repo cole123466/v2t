@@ -40,7 +40,7 @@ export interface Runtime extends MaintenanceDeps {
  * 不做版本校验就会出现「代码已是新的、拿到的 runner 还是旧的」——
  * 例如调用 runner.isQueueFull() 抛 "is not a function"。
  */
-export const RUNTIME_VERSION = 3;
+export const RUNTIME_VERSION = 4;
 
 interface CachedRuntime {
   version: number;
@@ -86,18 +86,19 @@ export function getRuntime(): Runtime {
     applyDataFixes(db);
     const store = new TaskStore(db);
     const source = createYtDlpProvider();
+    const activities = new ActivityStore(db);
     const runner = new TaskRunner({
       store,
       dataDir,
       asr: createSiliconFlowAsr(),
       source,
       chunkSeconds: getAsrChunkSeconds(),
+      activities,
     });
     const generations = new GenerationStore(db);
     const llm = createOpenAiCompatibleLlm();
     const generationService = new GenerationService({ store: generations, llm });
     const articles = new ArticleStore(db);
-    const activities = new ActivityStore(db);
     const jobs = new JobStore(db);
     const articleService = new ArticleService({
       store: articles,
