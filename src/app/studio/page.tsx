@@ -8,6 +8,15 @@ import type { Task, TaskStatus } from "@/server/tasks";
 import type { StorageStats } from "@/server/maintenance";
 import type { QueueSnapshot } from "@/server/runner";
 import { isProcessing, STATUS_LABEL } from "@/lib/task-status";
+import {
+  addUploads,
+  createUploadId,
+  removeUpload,
+  setUploadProgress,
+  startNext,
+  uploadSummary,
+  type UploadItem,
+} from "@/lib/upload-queue";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { PetToggle } from "@/components/pet/pet-toggle";
 import { petFlow } from "@/components/pet/pet-flow";
@@ -131,7 +140,8 @@ export default function StudioPage() {
   const [stats, setStats] = useState<StorageStats | null>(null);
   const [queue, setQueue] = useState<QueueSnapshot | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState<{ name: string; pct: number } | null>(null);
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const { active: activeUpload, waiting: waitingUploads } = uploadSummary(uploads);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [linkUrl, setLinkUrl] = useState("");
@@ -143,10 +153,14 @@ export default function StudioPage() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
-    const { tasks, stats, queue } = await fetchDashboard();
-    if (tasks) setTasks(tasks);
-    if (stats) setStats(stats);
-    if (queue) setQueue(queue);
+    try {
+      const { tasks, stats, queue } = await fetchDashboard();
+      if (tasks) setTasks(tasks);
+      if (stats) setStats(stats);
+      if (queue) setQueue(queue);
+    } catch {
+      // 刷新失败保留旧数据；页面每 4 秒轮询会重试，不打断上传队列
+    }
   }, []);
 
   const removeTask = useCallback(
@@ -235,43 +249,141 @@ export default function StudioPage() {
     }
   }, [linkUrl, linkBusy, router]);
 
-  const startUpload = useCallback(
-    (file: File) => {
-      if (uploading) return;
-      setError(null);
-      setUploading({ name: file.name, pct: 0 });
-      petFlow.importStart();
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", `/api/tasks?name=${encodeURIComponent(file.name)}`);
-      xhr.setRequestHeader("content-type", "application/octet-stream");
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          setUploading({ name: file.name, pct: Math.round((e.loaded / e.total) * 100) });
-        }
-      };
-      xhr.onload = () => {
-        if (xhr.status === 201) {
-          const task = JSON.parse(xhr.responseText) as Task;
-          petFlow.importDone();
-          router.push(`/task/${task.id}`);
-        } else {
+  /**
+   * 本地上传队列：ref 是唯一真源，state 只负责渲染。
+   * 一次只发一个请求（浏览器端串行），传完自动接上下一个；
+   * 第一个文件还在传时再拖进来的文件会排在后面，不会像以前那样被静默丢掉。
+   */
+  const uploadQueue = useRef<UploadItem[]>([]);
+  const uploadFiles = useRef(new Map<string, File>());
+  const pumping = useRef(false);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const syncUploads = useCallback(() => {
+    if (!mounted.current) return;
+    setUploads([...uploadQueue.current]);
+  }, []);
+
+  /** 发一个文件；成功后把任务插到列表最前，留在工作台看排队，不跳转 */
+  const sendUpload = useCallback(
+    (item: UploadItem, file: File) =>
+      new Promise<boolean>((resolve) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `/api/tasks?name=${encodeURIComponent(file.name)}`);
+        xhr.setRequestHeader("content-type", "application/octet-stream");
+        xhr.timeout = 30 * 60 * 1000;
+        xhr.upload.onprogress = (e) => {
+          if (!e.lengthComputable) return;
+          uploadQueue.current = setUploadProgress(
+            uploadQueue.current,
+            item.id,
+            (e.loaded / e.total) * 100,
+          );
+          syncUploads();
+        };
+        xhr.onload = () => {
+          if (xhr.status === 201) {
+            // 乐观插入：服务端已经落库为 queued，先显示出来，再拉一次权威列表
+            try {
+              const task = JSON.parse(xhr.responseText) as Task;
+              if (mounted.current) {
+                setTasks((prev) => [task, ...prev.filter((t) => t.id !== task.id)]);
+              }
+            } catch {
+              // 响应体异常时交给 refresh 兜底
+            }
+            void refresh();
+            resolve(true);
+            return;
+          }
           try {
             setError((JSON.parse(xhr.responseText) as { error: string }).error);
           } catch {
             setError(`上传失败（${xhr.status}）`);
           }
-          petFlow.importFailed();
-          setUploading(null);
+          resolve(false);
+        };
+        xhr.onerror = () => {
+          setError("网络中断，上传失败");
+          resolve(false);
+        };
+        xhr.ontimeout = () => {
+          setError("上传超时，请检查网络后重试");
+          resolve(false);
+        };
+        try {
+          xhr.send(file);
+        } catch (error) {
+          setError(error instanceof Error ? error.message : "上传失败");
+          resolve(false);
         }
-      };
-      xhr.onerror = () => {
-        setError("网络中断，上传失败");
-        petFlow.importFailed();
-        setUploading(null);
-      };
-      xhr.send(file);
+      }),
+    [refresh, syncUploads],
+  );
+
+  const pumpUploads = useCallback(async () => {
+    if (pumping.current) return;
+    pumping.current = true;
+    let failed = 0;
+    try {
+      petFlow.importStart();
+      for (;;) {
+        const started = startNext(uploadQueue.current);
+        if (!started.next) break;
+        uploadQueue.current = started.list;
+        syncUploads();
+        const item = started.next;
+        const file = uploadFiles.current.get(item.id);
+        if (!file) {
+          uploadQueue.current = removeUpload(uploadQueue.current, item.id);
+          syncUploads();
+          continue;
+        }
+        let ok = false;
+        try {
+          ok = await sendUpload(item, file);
+        } catch (error) {
+          setError(error instanceof Error ? error.message : "上传失败");
+        }
+        if (!ok) failed += 1;
+        uploadFiles.current.delete(item.id);
+        uploadQueue.current = removeUpload(uploadQueue.current, item.id);
+        syncUploads();
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "上传队列异常");
+    } finally {
+      pumping.current = false;
+      try {
+        if (failed === 0) petFlow.importDone();
+        else petFlow.importFailed();
+      } catch {
+        // 桌宠动画失败不影响上传队列
+      }
+    }
+  }, [sendUpload, syncUploads]);
+
+  const startUpload = useCallback(
+    (files: File[]) => {
+      if (files.length === 0) return;
+      setError(null);
+      const fresh: UploadItem[] = files.map((file) => {
+        const id = createUploadId();
+        uploadFiles.current.set(id, file);
+        return { id, name: file.name, sizeBytes: file.size, pct: 0, state: "waiting" };
+      });
+      uploadQueue.current = addUploads(uploadQueue.current, fresh);
+      syncUploads();
+      void pumpUploads();
     },
-    [router, uploading],
+    [pumpUploads, syncUploads],
   );
 
   useEffect(() => {
@@ -289,8 +401,8 @@ export default function StudioPage() {
       e.preventDefault();
       dragDepth.current = 0;
       setDragging(false);
-      const file = e.dataTransfer?.files?.[0];
-      if (file) startUpload(file);
+      const files = Array.from(e.dataTransfer?.files ?? []);
+      if (files.length > 0) startUpload(files);
     };
     window.addEventListener("dragenter", onDragEnter);
     window.addEventListener("dragover", onDragOver);
@@ -303,6 +415,19 @@ export default function StudioPage() {
       window.removeEventListener("drop", onDrop);
     };
   }, [startUpload]);
+
+  // 排队位次以服务端队列快照为准（它才是真正的取任务顺序）；
+  // 刚上传的任务可能比 4 秒一次的轮询更新得早，快照里还没有它就按列表先后
+  // （旧任务在前）补在快照已有位次之后，至少能显示"排队中（第 N 位）"。
+  const queuedPosition = new Map<string, number>();
+  if (queue) queue.queued.forEach((task, i) => queuedPosition.set(task.id, i + 1));
+  let nextPosition = queuedPosition.size;
+  for (let i = tasks.length - 1; i >= 0; i -= 1) {
+    const task = tasks[i];
+    if (task.status === "queued" && !queuedPosition.has(task.id)) {
+      queuedPosition.set(task.id, (nextPosition += 1));
+    }
+  }
 
   return (
     <main className="mx-auto flex min-h-svh w-full max-w-5xl flex-col px-6 pb-16">
@@ -330,21 +455,20 @@ export default function StudioPage() {
         <button
           type="button"
           onClick={() => fileInput.current?.click()}
-          disabled={uploading !== null}
-          className="glass group flex min-h-64 flex-col items-center justify-center gap-4 rounded-3xl border-dashed p-10 transition-all hover:border-gold/50 hover:bg-gold/5 disabled:opacity-60"
+          className="glass group flex min-h-64 flex-col items-center justify-center gap-4 rounded-3xl border-dashed p-10 transition-all hover:border-gold/50 hover:bg-gold/5"
         >
-          {uploading ? (
+          {activeUpload ? (
             <>
               <Loader className="size-9 animate-spin text-gold" strokeWidth={1.5} />
               <div className="text-center">
-                <p className="max-w-sm truncate text-sm text-paper">{uploading.name}</p>
+                <p className="max-w-sm truncate text-sm text-paper">{activeUpload.name}</p>
                 <div className="mx-auto mt-4 h-1 w-64 overflow-hidden rounded-full bg-tint/10">
                   <div
                     className="h-full rounded-full bg-gold transition-all"
-                    style={{ width: `${uploading.pct}%` }}
+                    style={{ width: `${activeUpload.pct}%` }}
                   />
                 </div>
-                <p className="mt-2 font-mono text-xs text-paper-faint">{uploading.pct}%</p>
+                <p className="mt-2 font-mono text-xs text-paper-faint">{activeUpload.pct}%</p>
               </div>
             </>
           ) : (
@@ -356,14 +480,25 @@ export default function StudioPage() {
               </div>
             </>
           )}
+          {waitingUploads.length > 0 ? (
+            <div className="text-center">
+              <p className="font-mono text-[11px] tracking-wider text-gold/80">
+                待上传 {waitingUploads.length} 个
+              </p>
+              <p className="mt-1 max-w-sm truncate text-xs text-paper-dim">
+                {waitingUploads.map((item) => item.name).join(" · ")}
+              </p>
+            </div>
+          ) : null}
           <input
             ref={fileInput}
             type="file"
+            multiple
             accept="video/*,audio/*,.mkv"
             className="hidden"
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) startUpload(file);
+              const files = Array.from(e.target.files ?? []);
+              if (files.length > 0) startUpload(files);
               e.target.value = "";
             }}
           />
@@ -479,7 +614,9 @@ export default function StudioPage() {
                       {task.status === "ready" ? (
                         <Check className="mr-1 inline size-3.5" strokeWidth={1.5} />
                       ) : null}
-                      {meta.label}
+                      {task.status === "queued" && queuedPosition.has(task.id)
+                        ? `排队中（第 ${queuedPosition.get(task.id)} 位）`
+                        : meta.label}
                     </span>
                   </Link>
                   <button
