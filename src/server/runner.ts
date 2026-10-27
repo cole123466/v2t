@@ -182,8 +182,14 @@ export class TaskRunner {
       const a = steps.start({ taskId, kind: "source", phase, title });
       activeStep = a.id;
     };
+    // 进度消息节流：下载回调与 ASR 分片循环高频触发，避免每次都 UPDATE activities
+    let lastStepMessageAt = -Infinity;
     const stepMessage = (message: string): void => {
-      if (steps && activeStep) steps.updateStatus(activeStep, "running", message);
+      if (!steps || !activeStep) return;
+      const now = Date.now();
+      if (now - lastStepMessageAt < 1000) return;
+      lastStepMessageAt = now;
+      steps.updateStatus(activeStep, "running", message);
     };
     const finishStep = (ok: boolean, message?: string): void => {
       if (steps && activeStep) steps.finish(activeStep, { ok, message: message ?? null });
