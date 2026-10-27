@@ -44,7 +44,8 @@ export function QaPanel({
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { turns?: QaTurn[] } | null) => {
         if (data?.turns) setTurns(data.turns);
-      });
+      })
+      .catch(() => {});
 
   useEffect(() => {
     void refresh();
