@@ -21,6 +21,28 @@ import {
 
 export type ArticleDetailLevel = "concise" | "standard" | "detailed";
 
+/** 合法的深度取值（导入页与文章接口共用校验） */
+export const DETAIL_LEVELS: ArticleDetailLevel[] = ["concise", "standard", "detailed"];
+
+/**
+ * 归一化导入时选定的文章选项（深度 + 关注点），落库到 tasks 的默认两列。
+ * 非法深度或超长关注点返回 error；关注点空白归一为 null。
+ */
+export function normalizeArticleOptions(input: {
+  detailLevel?: unknown;
+  purpose?: unknown;
+}): { detailLevel: ArticleDetailLevel; purpose: string | null } | { error: string } {
+  const detailLevel = (input.detailLevel ?? "standard") as ArticleDetailLevel;
+  if (!DETAIL_LEVELS.includes(detailLevel)) {
+    return { error: "detailLevel 需为 concise / standard / detailed" };
+  }
+  const purpose = typeof input.purpose === "string" ? input.purpose.trim() : "";
+  if (purpose.length > 500) {
+    return { error: "关注点不能超过 500 字" };
+  }
+  return { detailLevel, purpose: purpose || null };
+}
+
 export interface ArticleRecord {
   id: string;
   taskId: string;

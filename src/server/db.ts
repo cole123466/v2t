@@ -106,6 +106,9 @@ const COLUMNS: Array<{ table: string; column: string; ddl: string }> = [
   { table: "tasks", column: "source_notice", ddl: "TEXT" },
   // 设备归属：空串是加隔离之前的历史任务
   { table: "tasks", column: "owner", ddl: "TEXT NOT NULL DEFAULT ''" },
+  // 12 号票 I1（decision-input-ops）：导入页选定的文章默认值随任务落库
+  { table: "tasks", column: "detail_level", ddl: "TEXT" },
+  { table: "tasks", column: "purpose", ddl: "TEXT" },
   // 07 号票（decision-progress-model）：步骤模型——run / seq / phase / title / status 等
   { table: "activities", column: "run_id", ddl: "TEXT" },
   { table: "activities", column: "seq", ddl: "INTEGER NOT NULL DEFAULT 0" },

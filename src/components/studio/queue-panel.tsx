@@ -1,16 +1,35 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { ListOrdered } from "lucide-react";
+import { ListOrdered, X } from "lucide-react";
 import type { QueueSnapshot } from "@/server/runner";
 import { STATUS_LABEL } from "@/lib/task-status";
 
 /** 处理队列面板：串行管线同一时刻只处理 1 个，其余按入队顺序展示 */
-export function QueuePanel({ queue }: { queue: QueueSnapshot | null }) {
+export function QueuePanel({
+  queue,
+  onCancel,
+}: {
+  queue: QueueSnapshot | null;
+  /** 12 号票 I5：排队中的任务可取消出队；处理中的任务不提供取消 */
+  onCancel?: (id: string) => Promise<void>;
+}) {
+  const [cancelingId, setCancelingId] = useState<string | null>(null);
   if (!queue) return null;
   const active = queue.active[0] ?? null;
   const queued = queue.queued;
   const full = queued.length >= queue.queuedLimit;
+
+  const cancel = async (id: string) => {
+    if (!onCancel || cancelingId) return;
+    setCancelingId(id);
+    try {
+      await onCancel(id);
+    } finally {
+      setCancelingId(null);
+    }
+  };
 
   return (
     <section className="glass mt-5 rounded-2xl px-5 py-4">
@@ -62,6 +81,17 @@ export function QueuePanel({ queue }: { queue: QueueSnapshot | null }) {
               <span className="shrink-0 font-mono text-[10px] text-paper-faint">
                 {task.sourceKind === "link" ? "链接导入" : "本地上传"}
               </span>
+              {onCancel ? (
+                <button
+                  type="button"
+                  onClick={() => void cancel(task.id)}
+                  disabled={cancelingId !== null}
+                  title="取消该任务"
+                  className="flex shrink-0 items-center rounded-full border border-tint/10 px-2 py-0.5 font-mono text-[10px] text-paper-faint transition-colors hover:border-danger/40 hover:text-danger disabled:opacity-40"
+                >
+                  {cancelingId === task.id ? "取消中" : <X className="size-3" strokeWidth={1.5} />}
+                </button>
+              ) : null}
             </li>
           ))}
         </ul>

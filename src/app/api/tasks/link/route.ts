@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { taskDir } from "@/server/paths";
+import { normalizeArticleOptions } from "@/server/articles";
 import { QUEUE_FULL_CODE, QueueFullError, queueFullMessage } from "@/server/runner";
 import { getRuntime } from "@/server/runtime";
 import { isSupportedLink } from "@/server/source";
@@ -16,7 +17,9 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(req: Request) {
   const traceId = requestId(req);
-  const body = (await req.json().catch(() => null)) as { url?: string } | null;
+  const body = (await req.json().catch(() => null)) as
+    | { url?: string; detailLevel?: string; purpose?: string }
+    | null;
   const url = body?.url?.trim() ?? "";
   if (!url) return Response.json({ error: "缺少 url" }, { status: 400 });
   if (!isSupportedLink(url)) {
@@ -27,6 +30,15 @@ export async function POST(req: Request) {
   }
 
   const { store, runner, dataDir, source } = getRuntime();
+
+  // 12 号票 I1：导入页选定的文章默认值随任务落库
+  const options = normalizeArticleOptions({
+    detailLevel: body?.detailLevel,
+    purpose: body?.purpose,
+  });
+  if ("error" in options) {
+    return Response.json({ error: options.error }, { status: 400 });
+  }
 
   // 队列已满时不做 probe / 落库，直接拒绝
   if (runner.isQueueFull()) {
@@ -62,6 +74,8 @@ export async function POST(req: Request) {
     sourceTitle: meta.title,
     sourceThumbnail: meta.thumbnailUrl,
     sourceNotice: meta.notice ?? null,
+    detailLevel: options.detailLevel,
+    purpose: options.purpose,
   });
   if (meta.durationSec !== null) {
     store.update(task.id, { durationSec: meta.durationSec });

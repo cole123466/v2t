@@ -128,6 +128,25 @@ export class TaskRunner {
     void this.drain();
   }
 
+  /**
+   * 取消排队中的任务：出队 + 标 canceled（12 号票 I5）。
+   * 只对还在内存队列里的任务生效；正在处理或不存在于队列时返回 false，
+   * 由路由层转成 409。canceled 是终态：不在 isProcessing 里，
+   * 重启后 failOrphanTasks 不会把它改成 failed，worker 也不会再捡起。
+   *
+   * 为什么不做「运行中取消」：ASR 分段与 ffmpeg 半途掐断会留下脏文件
+   * （audio.mp3 存在但转录稿缺失），删除重建比支持半态便宜——
+   * 失败/不要的任务直接重新提交即可。
+   */
+  cancelQueued(taskId: string): boolean {
+    const idx = this.queue.indexOf(taskId);
+    if (idx === -1) return false;
+    this.queue.splice(idx, 1);
+    this.opts.store.update(taskId, { status: "canceled" });
+    this.emit(taskId);
+    return true;
+  }
+
   async whenIdle(): Promise<void> {
     if (!this.running && this.queue.length === 0) return;
     await new Promise<void>((resolve) => this.idleResolvers.push(resolve));

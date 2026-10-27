@@ -14,15 +14,11 @@ import {
 } from "lucide-react";
 import type { MindMapNode } from "@/server/article";
 import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
+import type { TaskDetailLevel } from "@/server/tasks";
+import { DETAIL_OPTIONS } from "@/lib/article-options";
 import { ArticleBlockView, InlineText } from "./article-block";
 import { RequestIdLine } from "./request-id";
 import { petFlow } from "@/components/pet/pet-flow";
-
-const DETAIL_OPTIONS: Array<{ value: ArticleDetailLevel; label: string; hint: string }> = [
-  { value: "concise", label: "速览", hint: "800 字内，只留核心" },
-  { value: "standard", label: "标准", hint: "信息完整而克制" },
-  { value: "detailed", label: "深入", hint: "展开推导与细节" },
-];
 
 function MindMapTree({
   nodes,
@@ -75,9 +71,14 @@ function MindMapTree({
 export function ArticlePanel({
   taskId,
   videoRef,
+  defaultDetail,
+  defaultPurpose,
 }: {
   taskId: string;
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** 导入页选定的默认值（12 号票 I1）：面板预填，仍可修改 */
+  defaultDetail?: TaskDetailLevel | null;
+  defaultPurpose?: string | null;
 }) {
   const [articles, setArticles] = useState<ArticleRecord[]>([]);
   const [busy, setBusy] = useState(false);
@@ -86,8 +87,8 @@ export function ArticlePanel({
   const [error, setError] = useState<string | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [detail, setDetail] = useState<ArticleDetailLevel>("standard");
-  const [purpose, setPurpose] = useState("");
+  const [detail, setDetail] = useState<ArticleDetailLevel>(defaultDetail ?? "standard");
+  const [purpose, setPurpose] = useState(defaultPurpose ?? "");
   const [citationTimes, setCitationTimes] = useState<Map<string, number>>(new Map());
   const [exporting, setExporting] = useState<"md" | "zip" | "html" | "pdf" | null>(null);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号

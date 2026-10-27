@@ -10,9 +10,13 @@ export type TaskStatus =
   | "transcribing"
   | "extracting-frames"
   | "ready"
-  | "failed";
+  | "failed"
+  | "canceled";
 
 export type SourceKind = "upload" | "link";
+
+/** 文章深度：与 articles 表的 detail_level 同一取值；任务上只是导入时选的默认值 */
+export type TaskDetailLevel = "concise" | "standard" | "detailed";
 
 /** 转写稿来源诊断 */
 export type TranscriptOrigin = "subtitle" | "asr" | "mixed";
@@ -38,6 +42,10 @@ export interface Task {
   downloadPct: number | null;
   /** 来源降级提示（如 B 站风控后改用官方接口），无则为空 */
   sourceNotice: string | null;
+  /** 导入页选定的文章深度默认值；未选（历史任务）为空，按 standard 处理 */
+  detailLevel: TaskDetailLevel | null;
+  /** 导入页填写的文章关注点默认值，可空 */
+  purpose: string | null;
   /** 设备归属（浏览器 cookie 派生）；空串表示加隔离之前的历史任务 */
   owner: string;
 }
@@ -53,6 +61,10 @@ export interface NewTask {
   sourceTitle?: string | null;
   sourceThumbnail?: string | null;
   sourceNotice?: string | null;
+  /** 导入页选定的文章深度默认值 */
+  detailLevel?: TaskDetailLevel | null;
+  /** 导入页填写的文章关注点默认值 */
+  purpose?: string | null;
 }
 
 export type TaskPatch = Partial<
@@ -70,6 +82,8 @@ export type TaskPatch = Partial<
     | "transcriptOrigin"
     | "downloadPct"
     | "sourceNotice"
+    | "detailLevel"
+    | "purpose"
   >
 >;
 
@@ -91,6 +105,8 @@ interface TaskRow {
   transcript_origin: string | null;
   download_pct: number | null;
   source_notice: string | null;
+  detail_level: string | null;
+  purpose: string | null;
   owner: string;
 }
 
@@ -113,6 +129,8 @@ function toTask(row: TaskRow): Task {
     transcriptOrigin: (row.transcript_origin as TranscriptOrigin | null) ?? null,
     downloadPct: row.download_pct,
     sourceNotice: row.source_notice,
+    detailLevel: (row.detail_level as TaskDetailLevel | null) ?? null,
+    purpose: row.purpose,
     owner: row.owner ?? "",
   };
 }
@@ -139,16 +157,20 @@ export class TaskStore {
       transcriptOrigin: null,
       downloadPct: null,
       sourceNotice: input.sourceNotice ?? null,
+      detailLevel: input.detailLevel ?? null,
+      purpose: input.purpose ?? null,
       owner: input.owner ?? "",
     };
     this.db
       .prepare(
         `INSERT INTO tasks (id, original_name, ext, size_bytes, duration_sec, status, progress, error,
                             created_at, media_purged_at, source_kind, source_url, source_title,
-                            source_thumbnail, transcript_origin, download_pct, source_notice, owner)
+                            source_thumbnail, transcript_origin, download_pct, source_notice,
+                            detail_level, purpose, owner)
          VALUES (@id, @originalName, @ext, @sizeBytes, @durationSec, @status, @progress, @error,
                  @createdAt, @mediaPurgedAt, @sourceKind, @sourceUrl, @sourceTitle,
-                 @sourceThumbnail, @transcriptOrigin, @downloadPct, @sourceNotice, @owner)`,
+                 @sourceThumbnail, @transcriptOrigin, @downloadPct, @sourceNotice,
+                 @detailLevel, @purpose, @owner)`,
       )
       .run(bind(task));
     return task;
@@ -207,6 +229,8 @@ export class TaskStore {
       transcriptOrigin: "transcript_origin",
       downloadPct: "download_pct",
       sourceNotice: "source_notice",
+      detailLevel: "detail_level",
+      purpose: "purpose",
     };
     const sets: string[] = [];
     const params: Record<string, string | number | null> = { id };
