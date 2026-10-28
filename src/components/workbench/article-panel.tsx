@@ -6,30 +6,33 @@ import {
   Download,
   FileDown,
   FileText,
+  Link2,
   Loader,
   Printer,
   RotateCcw,
   X,
 } from "lucide-react";
 import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
+import type { TaskDetailLevel } from "@/server/tasks";
+import { DETAIL_OPTIONS } from "@/lib/article-options";
 import { ArticleBlockView, InlineText } from "./article-block";
 import { RequestIdLine } from "./request-id";
 import { MindOverview } from "./mind-overview";
 import { scrollToSection, useContainerSpy } from "@/lib/container-spy";
+import { ShareDialog } from "./share-dialog";
 import { petFlow } from "@/components/pet/pet-flow";
-
-const DETAIL_OPTIONS: Array<{ value: ArticleDetailLevel; label: string; hint: string }> = [
-  { value: "concise", label: "速览", hint: "800 字内，只留核心" },
-  { value: "standard", label: "标准", hint: "信息完整而克制" },
-  { value: "detailed", label: "深入", hint: "展开推导与细节" },
-];
 
 export function ArticlePanel({
   taskId,
   videoRef,
+  defaultDetail,
+  defaultPurpose,
 }: {
   taskId: string;
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** 导入页选定的默认值（12 号票 I1）：面板预填，仍可修改 */
+  defaultDetail?: TaskDetailLevel | null;
+  defaultPurpose?: string | null;
 }) {
   const [articles, setArticles] = useState<ArticleRecord[]>([]);
   const [busy, setBusy] = useState(false);
@@ -38,10 +41,11 @@ export function ArticlePanel({
   const [error, setError] = useState<string | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [detail, setDetail] = useState<ArticleDetailLevel>("standard");
-  const [purpose, setPurpose] = useState("");
+  const [detail, setDetail] = useState<ArticleDetailLevel>(defaultDetail ?? "standard");
+  const [purpose, setPurpose] = useState(defaultPurpose ?? "");
   const [citationTimes, setCitationTimes] = useState<Map<string, number>>(new Map());
   const [exporting, setExporting] = useState<"md" | "zip" | "html" | "pdf" | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
   const abortRef = useRef<AbortController | null>(null);
   // 正文滚动容器：window 不滚，导图联动与章节定位都基于它（06 号票 K3）
@@ -362,6 +366,16 @@ export function ArticlePanel({
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
               <button
                 type="button"
+                onClick={() => setShareOpen(true)}
+                disabled={active.status !== "done"}
+                className="inline-flex items-center gap-1 font-mono text-[10px] text-paper-faint transition-colors hover:text-gold disabled:opacity-50"
+                title="创建只读分享链接"
+              >
+                <Link2 className="size-3" strokeWidth={1.5} />
+                分享
+              </button>
+              <button
+                type="button"
                 onClick={() => void exportPdf()}
                 disabled={exporting !== null}
                 className="inline-flex items-center gap-1 rounded-lg border border-gold/40 bg-gold/10 px-2 py-1 font-mono text-[10px] text-gold transition-colors hover:bg-gold/20 disabled:opacity-50"
@@ -512,6 +526,8 @@ export function ArticlePanel({
             {active.detailLevel === "concise" ? "速览" : active.detailLevel === "detailed" ? "深入" : "标准"}
             {" · "}
             {active.content.sections.length} 章
+            {/* 模型身份行（11 号票 S6）：历史文章 model 为默认值时不显示 */}
+            {active.model && active.model !== "glm-4.6" ? ` · ${active.model}` : ""}
             {active.purpose ? ` · 关注点：${active.purpose}` : ""}
           </p>
 
@@ -618,6 +634,14 @@ export function ArticlePanel({
             </p>
           ) : null}
         </div>
+      ) : null}
+
+      {shareOpen && active ? (
+        <ShareDialog
+          taskId={taskId}
+          articleId={active.id}
+          onClose={() => setShareOpen(false)}
+        />
       ) : null}
     </div>
   );

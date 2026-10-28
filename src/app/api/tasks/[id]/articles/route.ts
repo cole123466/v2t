@@ -5,7 +5,7 @@ import type { Transcript } from "@/server/asr";
 import { readFrameManifest } from "@/server/frames";
 import { taskDir, transcriptPath } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
-import type { ArticleDetailLevel } from "@/server/articles";
+import { DETAIL_LEVELS, type ArticleDetailLevel } from "@/server/articles";
 import { errorFields, logError } from "@/server/log";
 import { requestId } from "@/server/request";
 import { deviceOwner } from "@/server/owner";
@@ -13,8 +13,6 @@ import { deviceOwner } from "@/server/owner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const DETAIL_LEVELS: ArticleDetailLevel[] = ["concise", "standard", "detailed"];
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

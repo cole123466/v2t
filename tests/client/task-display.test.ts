@@ -22,6 +22,8 @@ function task(id: string, status: Task["status"] = "queued"): Task {
     transcriptOrigin: null,
     downloadPct: null,
     sourceNotice: null,
+    detailLevel: null,
+    purpose: null,
     owner: "device",
   };
 }

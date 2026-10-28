@@ -108,6 +108,8 @@ export default function TaskPage() {
   const [time, setTime] = useState(0);
   const [playbackError, setPlaybackError] = useState(false);
   const [tab, setTab] = useState<TabKey>("transcript");
+  const [canceling, setCanceling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastStatus = useRef<string | null>(null);
 
@@ -133,6 +135,7 @@ export default function TaskPage() {
       if (first) petFlow.idle();
       else petFlow.done();
     } else if (status === "failed") petFlow.failed();
+    else if (status === "canceled") petFlow.idle();
     else petFlow.working();
   }, [task?.status]);
 
@@ -167,6 +170,25 @@ export default function TaskPage() {
     }
     return idx;
   }, [transcript, time]);
+
+  // 12 号票 I5：取消排队中的任务。运行中的任务没有取消入口——
+  // 半途掐断转写会留下脏文件，重新提交比支持半态便宜。
+  const cancelTask = async () => {
+    if (canceling) return;
+    setCanceling(true);
+    setCancelError(null);
+    try {
+      const res = await fetch(`/api/tasks/${id}/cancel`, { method: "POST" });
+      if (!res.ok) {
+        const detail = (await res.json().catch(() => null)) as { error?: string } | null;
+        setCancelError(detail?.error ?? `取消失败（${res.status}）`);
+      }
+    } catch {
+      setCancelError("网络中断，取消失败");
+    } finally {
+      setCanceling(false);
+    }
+  };
 
   if (missing) {
     return (
@@ -231,6 +253,29 @@ export default function TaskPage() {
     );
   }
 
+  // 已取消：终态视图，没有可继续的内容，引导重新提交
+  if (task.status === "canceled") {
+    return (
+      <main className="mx-auto w-full max-w-3xl px-6 pb-16">
+        {header}
+        {notice}
+        <section className="glass mt-6 flex flex-col gap-3 rounded-3xl p-8">
+          <X className="size-8 text-paper-faint" strokeWidth={1.5} />
+          <h2 className="text-lg text-paper">任务已取消</h2>
+          <p className="text-xs leading-relaxed text-paper-faint">
+            该任务在排队时被取消，未产生转录稿与文章。需要的话请重新提交来源。
+          </p>
+          <Link
+            href="/studio"
+            className="mt-2 inline-flex w-fit items-center gap-2 rounded-full border border-gold/40 px-4 py-1.5 font-mono text-[11px] tracking-widest text-gold transition-colors hover:bg-gold hover:text-ink-950"
+          >
+            返回导入页
+          </Link>
+        </section>
+      </main>
+    );
+  }
+
   if (task.status !== "ready") {
     const current = stageIndex(task);
     return (
@@ -287,6 +332,24 @@ export default function TaskPage() {
           <p className="text-center font-mono text-[11px] tracking-widest text-paper-faint">
             {statusHint(task)}
           </p>
+
+          {/* 排队中的任务可取消出队（12 号票 I5）；处理中没有取消入口 */}
+          {task.status === "queued" ? (
+            <div className="flex flex-col items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void cancelTask()}
+                disabled={canceling}
+                className="inline-flex items-center gap-2 rounded-xl border border-danger/30 bg-danger/5 px-4 py-1.5 font-mono text-[10px] tracking-wider text-danger/80 transition-colors hover:bg-danger/15 disabled:opacity-40"
+              >
+                <X className="size-3" strokeWidth={1.5} />
+                {canceling ? "取消中" : "取消任务"}
+              </button>
+              {cancelError ? (
+                <p className="font-mono text-[10px] text-danger/80">{cancelError}</p>
+              ) : null}
+            </div>
+          ) : null}
         </section>
       </main>
     );
@@ -435,7 +498,14 @@ export default function TaskPage() {
                 </div>
               </div>
             ) : null}
-            {tab === "article" ? <ArticlePanel taskId={id} videoRef={videoRef} /> : null}
+            {tab === "article" ? (
+              <ArticlePanel
+                taskId={id}
+                videoRef={videoRef}
+                defaultDetail={task.detailLevel}
+                defaultPurpose={task.purpose}
+              />
+            ) : null}
             {tab === "qa" ? <QaPanel taskId={id} videoRef={videoRef} /> : null}
             {tab === "copy" ? <PromptPanel taskId={id} taskName={task.originalName} /> : null}
             {tab === "process" ? <ProcessPanel taskId={id} /> : null}

@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Link2, ListOrdered, Loader, Upload, X } from "lucide-react";
+import { Link2, ListOrdered, Loader, SlidersHorizontal, Upload, X } from "lucide-react";
 import type { Task } from "@/server/tasks";
+import type { TaskDetailLevel } from "@/server/tasks";
+import { DETAIL_OPTIONS } from "@/lib/article-options";
 import {
   addUploads,
   createUploadId,
@@ -31,6 +33,9 @@ export default function StudioPage() {
   const [linkMeta, setLinkMeta] = useState<{ title: string; durationSec: number | null } | null>(
     null,
   );
+  // 12 号票 I1：深度与关注点前移到导入页，作为任务的默认值落库（任务页仍可改）
+  const [detail, setDetail] = useState<TaskDetailLevel>("standard");
+  const [purpose, setPurpose] = useState("");
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -68,7 +73,7 @@ export default function StudioPage() {
       const res = await fetch("/api/tasks/link", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, detailLevel: detail, purpose }),
       });
       const data = (await res.json().catch(() => null)) as
         | (Task & { error?: string })
@@ -83,7 +88,7 @@ export default function StudioPage() {
     } finally {
       setLinkBusy(false);
     }
-  }, [linkUrl, linkBusy, router]);
+  }, [linkUrl, linkBusy, detail, purpose, router]);
 
   /**
    * 本地上传队列：ref 是唯一真源，state 只负责渲染。
@@ -112,7 +117,12 @@ export default function StudioPage() {
     (item: UploadItem, file: File) =>
       new Promise<boolean>((resolve) => {
         const xhr = new XMLHttpRequest();
-        xhr.open("POST", `/api/tasks?name=${encodeURIComponent(file.name)}`);
+        const query = new URLSearchParams({
+          name: file.name,
+          detailLevel: detail,
+          ...(purpose.trim() ? { purpose: purpose.trim() } : {}),
+        });
+        xhr.open("POST", `/api/tasks?${query.toString()}`);
         xhr.setRequestHeader("content-type", "application/octet-stream");
         xhr.timeout = 30 * 60 * 1000;
         xhr.upload.onprogress = (e) => {
@@ -153,7 +163,7 @@ export default function StudioPage() {
           resolve(false);
         }
       }),
-    [refreshQueue, syncUploads],
+    [refreshQueue, syncUploads, detail, purpose],
   );
 
   const pumpUploads = useCallback(async () => {
@@ -212,6 +222,23 @@ export default function StudioPage() {
       void pumpUploads();
     },
     [pumpUploads, syncUploads],
+  );
+
+  // 12 号票 I5：取消排队中的任务，出队后刷新队列快照释放队列位
+  const cancelQueued = useCallback(
+    async (id: string) => {
+      try {
+        const res = await fetch(`/api/tasks/${id}/cancel`, { method: "POST" });
+        if (!res.ok) {
+          const detail = (await res.json().catch(() => null)) as { error?: string } | null;
+          setError(detail?.error ?? `取消失败（${res.status}）`);
+        }
+      } catch {
+        setError("网络中断，取消失败");
+      }
+      await refreshQueue();
+    },
+    [refreshQueue],
   );
 
   useEffect(() => {
@@ -351,6 +378,41 @@ export default function StudioPage() {
         </div>
       </div>
 
+      <section className="glass mt-5 rounded-2xl px-5 py-4">
+        <p className="flex items-center gap-2 font-mono text-[10px] tracking-widest text-paper-faint">
+          <SlidersHorizontal className="size-3.5" strokeWidth={1.5} />
+          文章默认值 / ARTICLE DEFAULTS
+        </p>
+        <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-center">
+          <div className="flex gap-1.5">
+            {DETAIL_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setDetail(opt.value)}
+                title={opt.hint}
+                className={`rounded-lg border px-3 py-1.5 font-mono text-[11px] transition-colors ${
+                  detail === opt.value
+                    ? "border-gold/40 bg-gold/10 text-gold"
+                    : "border-tint/10 text-paper-faint hover:text-paper-dim"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <input
+            value={purpose}
+            onChange={(e) => setPurpose(e.target.value.slice(0, 500))}
+            placeholder="本次关注点（可选，≤500 字），对之后导入的任务生效"
+            className="min-w-0 flex-1 rounded-xl border border-tint/10 bg-ink-950/60 px-3 py-2 text-xs text-paper outline-none transition-colors placeholder:text-paper-faint focus:border-gold/50"
+          />
+        </div>
+        <p className="mt-2 text-xs text-paper-faint">
+          上传或链接导入的任务都会带上这里的深度与关注点，生成文章时作为默认值，任务页里仍可修改。
+        </p>
+      </section>
+
       {error ? (
         <div className="mt-5 flex items-center gap-3 rounded-2xl border border-danger/30 bg-danger/10 px-5 py-3 text-sm text-danger/90">
           <X className="size-4 shrink-0" strokeWidth={1.5} />
@@ -358,7 +420,7 @@ export default function StudioPage() {
         </div>
       ) : null}
 
-      <QueuePanel queue={queue} />
+      <QueuePanel queue={queue} onCancel={cancelQueued} />
 
       <Link
         href="/studio/tasks"
