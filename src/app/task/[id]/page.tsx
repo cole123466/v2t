@@ -33,6 +33,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { PetToggle } from "@/components/pet/pet-toggle";
 import { clock } from "@/lib/time";
 import { failureHint } from "@/lib/failure-hint";
+import type { QaContext } from "@/server/qa";
 
 const STAGES = [
   { key: "scope", label: "获取来源", icon: Upload },
@@ -108,10 +109,17 @@ export default function TaskPage() {
   const [time, setTime] = useState(0);
   const [playbackError, setPlaybackError] = useState(false);
   const [tab, setTab] = useState<TabKey>("transcript");
+  // 09 号票 P1/P2：选段 / 选帧追问锚点，由文章区与文稿区入口注入，问答面板消费
+  const [qaContext, setQaContext] = useState<QaContext | null>(null);
   const [canceling, setCanceling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastStatus = useRef<string | null>(null);
+
+  const askWithContext = (context: QaContext) => {
+    setQaContext(context);
+    setTab("qa");
+  };
 
   useEffect(() => {
     void fetch(`/api/tasks/${id}`)
@@ -420,6 +428,12 @@ export default function TaskPage() {
                 activeIndex={activeIndex}
                 taskName={task.originalName}
                 onSeek={setTime}
+                onAskSegment={
+                  transcript.timestampsMissing
+                    ? undefined
+                    : (segmentIndex, quote) =>
+                        askWithContext({ kind: "transcript", segmentIndex, quote })
+                }
               />
             </div>
           ) : transcriptMissing ? (
@@ -502,11 +516,23 @@ export default function TaskPage() {
               <ArticlePanel
                 taskId={id}
                 videoRef={videoRef}
+                onAskSection={(sectionId, blockIndex, quote) =>
+                  askWithContext({ kind: "section", sectionId, blockIndex, quote })
+                }
+                onAskFrame={(frameId) => askWithContext({ kind: "frame", frameId })}
                 defaultDetail={task.detailLevel}
                 defaultPurpose={task.purpose}
               />
             ) : null}
-            {tab === "qa" ? <QaPanel taskId={id} videoRef={videoRef} /> : null}
+            {tab === "qa" ? (
+              <QaPanel
+                taskId={id}
+                videoRef={videoRef}
+                pendingContext={qaContext}
+                onConsumeContext={() => setQaContext(null)}
+                onRestoreContext={setQaContext}
+              />
+            ) : null}
             {tab === "copy" ? <PromptPanel taskId={id} taskName={task.originalName} /> : null}
             {tab === "process" ? <ProcessPanel taskId={id} /> : null}
           </div>

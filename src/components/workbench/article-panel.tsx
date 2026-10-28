@@ -16,6 +16,7 @@ import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
 import type { TaskDetailLevel } from "@/server/tasks";
 import { DETAIL_OPTIONS } from "@/lib/article-options";
 import { ArticleBlockView, InlineText } from "./article-block";
+import { SelectionPopover } from "./selection-popover";
 import { RequestIdLine } from "./request-id";
 import { MindOverview } from "./mind-overview";
 import { scrollToSection, useContainerSpy } from "@/lib/container-spy";
@@ -25,11 +26,17 @@ import { petFlow } from "@/components/pet/pet-flow";
 export function ArticlePanel({
   taskId,
   videoRef,
+  onAskSection,
+  onAskFrame,
   defaultDetail,
   defaultPurpose,
 }: {
   taskId: string;
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** 文章选段追问（09 号票 P1）：quote 已由 SelectionPopover 捕获 */
+  onAskSection?: (sectionId: string, blockIndex: number, quote: string) => void;
+  /** figure「问这张画面」（P2） */
+  onAskFrame?: (frameId: string) => void;
   /** 导入页选定的默认值（12 号票 I1）：面板预填，仍可修改 */
   defaultDetail?: TaskDetailLevel | null;
   defaultPurpose?: string | null;
@@ -45,11 +52,11 @@ export function ArticlePanel({
   const [purpose, setPurpose] = useState(defaultPurpose ?? "");
   const [citationTimes, setCitationTimes] = useState<Map<string, number>>(new Map());
   const [exporting, setExporting] = useState<"md" | "zip" | "html" | "pdf" | null>(null);
+  // 正文滚动容器：选区浮层定位、导图联动与章节定位都基于它（window 不滚，06 号票 K3）
+  const contentRef = useRef<HTMLDivElement>(null);
   const [shareOpen, setShareOpen] = useState(false);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
   const abortRef = useRef<AbortController | null>(null);
-  // 正文滚动容器：window 不滚，导图联动与章节定位都基于它（06 号票 K3）
-  const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     return () => abortRef.current?.abort();
@@ -510,7 +517,33 @@ export function ArticlePanel({
       ) : null}
 
       {active?.content ? (
-        <div ref={contentRef} className="glass min-h-0 flex-1 overflow-auto rounded-2xl p-6">
+        <div ref={contentRef} className="glass relative min-h-0 flex-1 overflow-auto rounded-2xl p-6">
+          {onAskSection ? (
+            <SelectionPopover
+              containerRef={contentRef}
+              onAsk={(quote) => {
+                // 用选区起点反查所属章节与块：向上找最近的 section 根，
+                // 途中经过块包装 div（data-block-index）时记下块序号
+                const sel = window.getSelection();
+                let el: Node | null = sel?.rangeCount
+                  ? sel.getRangeAt(0).startContainer
+                  : null;
+                let blockIndex = -1;
+                while (el) {
+                  if (el instanceof HTMLElement) {
+                    if (blockIndex < 0 && el.dataset.blockIndex !== undefined) {
+                      blockIndex = Number(el.dataset.blockIndex);
+                    }
+                    if (el.dataset.sectionId) break;
+                  }
+                  el = el.parentNode;
+                }
+                const host = el as HTMLElement | null;
+                if (!host?.dataset.sectionId) return;
+                onAskSection(host.dataset.sectionId, blockIndex, quote);
+              }}
+            />
+          ) : null}
           {/* 正文限宽：过宽的行长会让阅读跳行，正文区在宽屏下居中 */}
           <div className="mx-auto w-full max-w-[44rem]">
           {active.status === "streaming" ? (
@@ -549,6 +582,7 @@ export function ArticlePanel({
               <section
                 key={section.id}
                 id={`section-${section.id}`}
+                data-section-id={section.id}
                 className={`scroll-mt-4 ${index > 0 ? "border-t border-tint/[0.07] pt-8" : ""}`}
               >
                 <h3 className="flex items-baseline gap-2.5 font-display text-[19px] font-semibold leading-snug text-paper">
@@ -559,13 +593,15 @@ export function ArticlePanel({
                 </h3>
                 <div className="mt-3 space-y-3.5">
                   {section.blocks.map((block, i) => (
-                    <ArticleBlockView
-                      key={i}
-                      taskId={taskId}
-                      block={block}
-                      times={citationTimes}
-                      onSeek={seek}
-                    />
+                    <div key={i} data-block-index={i} data-block-type={block.type}>
+                      <ArticleBlockView
+                        taskId={taskId}
+                        block={block}
+                        times={citationTimes}
+                        onSeek={seek}
+                        onAskFrame={onAskFrame}
+                      />
+                    </div>
                   ))}
                 </div>
               </section>

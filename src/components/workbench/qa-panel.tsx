@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { Ban, Loader, MessageCircleQuestion, RotateCcw, Send, X } from "lucide-react";
+import { Ban, Image as ImageIcon, Loader, MessageCircleQuestion, RotateCcw, Send, Type, X } from "lucide-react";
+import type { QaContext } from "@/server/qa";
 import { clock } from "@/lib/time";
 import { RequestIdLine } from "./request-id";
 
@@ -27,9 +28,17 @@ interface QaTurn {
 export function QaPanel({
   taskId,
   videoRef,
+  pendingContext,
+  onConsumeContext,
+  onRestoreContext,
 }: {
   taskId: string;
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** 文章选段 / 选帧等入口注入的锚点；提问时随请求带走 */
+  pendingContext: QaContext | null;
+  onConsumeContext: () => void;
+  /** 请求失败时归还锚点，避免选段/选帧上下文静默丢失 */
+  onRestoreContext?: (context: QaContext) => void;
 }) {
   const [turns, setTurns] = useState<QaTurn[]>([]);
   const [question, setQuestion] = useState("");
@@ -70,12 +79,15 @@ export function QaPanel({
     void video.play().catch(() => {});
   };
 
-  const consumeStream = async (res: Response, aborted: () => boolean): Promise<"done" | "error" | "aborted"> => {
+  const consumeStream = async (
+    res: Response,
+    aborted: () => boolean,
+  ): Promise<"done" | "error" | "aborted" | "http-error"> => {
     if (!res.ok || !res.body) {
       const data = (await res.json().catch(() => null)) as { error?: string } | null;
       setRequestId(res.headers.get("x-request-id"));
       setError(data?.error ?? `提问失败（${res.status}）`);
-      return "error";
+      return "http-error";
     }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -116,6 +128,12 @@ export function QaPanel({
     setPendingQuestion(payload.question);
     setStreamText("");
     setQuestion("");
+    // 36：提问（非重答）时带走待发锚点并消费；失败未送达服务端时归还
+    const context = payload.retryOfTurnId ? null : pendingContext;
+    const restoreContext = () => {
+      if (context) onRestoreContext?.(context);
+    };
+    if (!payload.retryOfTurnId) onConsumeContext();
     const abort = new AbortController();
     abortRef.current = abort;
     try {
@@ -125,10 +143,15 @@ export function QaPanel({
       const res = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload.retryOfTurnId ? {} : { question: payload.question }),
+        body: JSON.stringify(
+          payload.retryOfTurnId ? {} : { question: payload.question, context: context ?? undefined },
+        ),
         signal: abort.signal,
       });
       const outcome = await consumeStream(res, () => abort.signal.aborted);
+      // 锚点只在「请求未送达服务端」时归还：HTTP 层失败（4xx/5xx）。
+      // SSE error 事件时 user 行已带锚点落库，归还反而会重复
+      if (outcome === "http-error") restoreContext();
       // 轮状态在服务端落定（done→completed、断流→canceled/failed）：
       // 无论哪种结局都刷新，把终态轮换回列表，流式正文随 finally 清空不丢内容
       if (outcome !== "aborted") await refresh();
@@ -137,6 +160,7 @@ export function QaPanel({
         await refresh();
       } else {
         setError(err instanceof Error ? err.message : String(err));
+        restoreContext();
         await refresh();
       }
     } finally {
@@ -290,6 +314,30 @@ export function QaPanel({
       </div>
 
       <div className="shrink-0 border-t border-tint/5 p-3">
+        {pendingContext ? (
+          <div className="mb-2 flex items-center gap-1.5">
+            <span className="inline-flex max-w-full items-center gap-1 rounded-md border border-gold/30 bg-gold/10 px-1.5 py-0.5 font-mono text-[10px] text-gold">
+              {pendingContext.kind === "frame" ? (
+                <ImageIcon className="size-3 shrink-0" strokeWidth={1.5} />
+              ) : (
+                <Type className="size-3 shrink-0" strokeWidth={1.5} />
+              )}
+              <span className="truncate">
+                {pendingContext.kind === "frame"
+                  ? pendingContext.frameId.toUpperCase()
+                  : pendingContext.quote.slice(0, 18)}
+              </span>
+              <button
+                type="button"
+                onClick={onConsumeContext}
+                className="shrink-0 text-gold/70 transition-colors hover:text-gold"
+                title="移除锚点"
+              >
+                <X className="size-3" strokeWidth={1.5} />
+              </button>
+            </span>
+          </div>
+        ) : null}
         <div className="flex items-end gap-2">
           <textarea
             value={question}
