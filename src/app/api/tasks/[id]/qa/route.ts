@@ -6,7 +6,7 @@ import { getRuntime } from "@/server/runtime";
 import { errorFields, logError } from "@/server/log";
 import { requestId } from "@/server/request";
 import { deviceOwner } from "@/server/owner";
-import { validateQaContext, type QaContext } from "@/server/qa";
+import { validateQaContext, isTurnInFlight, type QaContext } from "@/server/qa";
 import type { Article } from "@/server/article";
 
 export const runtime = "nodejs";
@@ -14,11 +14,10 @@ export const dynamic = "force-dynamic";
 
 const MAX_QUESTION = 1000;
 
-/**
- * 读投影（09 号票 P3 / 14 号票原则）：按相邻 user/assistant 对合成轮，
+/** GET /qa 的轮投影（09 号票 P3 / 14 号票原则）：按相邻 user/assistant 对合成轮，
  * 老数据（无 turn_id）也能正确配对，不做数据回填。
- * 仍为 streaming 的行是僵尸（服务重启或断连遗留），一律投影成 canceled。
- */
+ * 仍为 streaming 的行：本进程在途轮保持 streaming 原样；登记表外的僵尸（服务重启
+ * 或断连遗留）投影成 canceled。*/
 function groupTurns(taskId: string) {
   const rt = getRuntime();
   const messages = rt.qa.listForTask(taskId);
@@ -27,11 +26,12 @@ function groupTurns(taskId: string) {
     question: string;
     context: QaContext | null;
     answer: {
-      status: "completed" | "canceled" | "failed";
+      status: "completed" | "canceled" | "failed" | "streaming";
       text: string;
       citations: typeof messages[number]["citations"];
       limitations: typeof messages[number]["limitations"];
       error: string | null;
+      requestId: string | null;
     } | null;
     retryable: boolean;
   }> = [];
@@ -39,8 +39,19 @@ function groupTurns(taskId: string) {
     const user = messages[i];
     if (user.role !== "user") continue;
     const answer = messages[i + 1]?.role === "assistant" ? messages[i + 1] : null;
+    // streaming 行分两种：本进程在途轮（正常回答中，保持 streaming 原样展示）；
+    // 服务重启/断连遗留的僵尸（登记表里没有）→ 投影成 canceled
+    const inFlight = answer?.status === "streaming" && answer.turnId && isTurnInFlight(answer.turnId);
     const status =
-      answer?.status === "failed" ? "failed" : !answer || answer.status === "streaming" ? "canceled" : "completed";
+      answer?.status === "failed"
+        ? "failed"
+        : answer?.status === "streaming" && !inFlight
+          ? "canceled"
+          : answer?.status === "streaming"
+            ? "streaming"
+            : !answer
+              ? "canceled"
+              : "completed";
     turns.push({
       turnId: user.turnId ?? user.id,
       question: user.content,
@@ -52,6 +63,7 @@ function groupTurns(taskId: string) {
             citations: answer.citations,
             limitations: answer.limitations,
             error: status === "failed" ? answer.error : null,
+            requestId: answer.requestId,
           }
         : null,
       retryable: false,
@@ -123,13 +135,20 @@ export async function POST(
       validateQaContext(context, {
         section: (sectionId) => article?.sections.find((s) => s.id === sectionId) ?? null,
         frame: (frameId) => manifest?.frames.find((f) => f.id === frameId) ?? null,
-        segmentCount: transcript.segments.length,
+        segment: (segmentIndex) => transcript.segments[segmentIndex] ?? null,
       });
     } catch (err) {
       const field = err instanceof Error && "field" in err ? String((err as { field: unknown }).field) : "context";
       return Response.json({ error: err instanceof Error ? err.message : "锚点不合法", field }, { status: 422 });
     }
   }
+
+  // 会话级互斥占位：同任务已有在途问答（提问或重答）则拒绝。
+  // 占位先于 SSE 启动，与 retry 端点共用一把锁，防止并发提问/重答交错追加轮。
+  if (rt.qa.hasInFlight(id)) {
+    return Response.json({ error: "已有回答正在进行，请稍候" }, { status: 409 });
+  }
+  rt.qa.markInFlight(id);
 
   return streamAnswer({ taskId: id, traceId, question, context, transcript, req });
 }
@@ -177,6 +196,7 @@ function streamAnswer(input: {
           signal: abort.signal,
           onDelta: (delta) => send("delta", { delta }),
         });
+        rt.qa.markSettled(taskId);
         rt.activities.finish(activity.id, {
           ok: true,
           status: "completed",
@@ -186,6 +206,7 @@ function streamAnswer(input: {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const canceled = abort.signal.aborted || message.includes("已取消") || message.includes("已中止");
+        rt.qa.markSettled(taskId);
         logError("qa request failed", {
           task_id: taskId,
           trace_id: traceId,
@@ -199,7 +220,13 @@ function streamAnswer(input: {
         });
         // 询轮 id：ask 抛错前已落 user 行，取该任务最后一轮
         const turnId = rt.qa.lastTurn(taskId).find((m) => m.role === "user")?.turnId ?? null;
-        send("error", { turnId, message, request_id: traceId, code: canceled ? "canceled" : "failed" });
+        // 原始错误细节只进日志/activities；SSE 面向客户端，用固定文案避免泄露内部信息
+        send("error", {
+          turnId,
+          message: canceled ? "已停止回答" : "回答失败，请稍后重试或重新提问",
+          request_id: traceId,
+          code: canceled ? "canceled" : "failed",
+        });
       } finally {
         try {
           controller.close();

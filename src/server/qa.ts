@@ -51,15 +51,17 @@ export class QaContextError extends Error {
 
 type SectionLookup = (sectionId: string) => { blocks: ReadonlyArray<unknown> } | null;
 type FrameLookup = (frameId: string) => { id: string; tSec: number } | null;
+/** 按序号取转写段（quote 内容核对用），越界返回 null */
+type SegmentLookup = (segmentIndex: number) => { text: string } | null;
 
 /**
  * 锚点白名单校验（对齐 15 号 strict 词汇表）：
- * - quote ≤ 200 字，与目标块文本做前缀/包含核对（容忍选区截断）
+ * - quote ≤ 200 字，与目标块/转写段文本做前缀/包含核对（容忍选区截断）
  * - frame 锚点必须在帧目录内
  */
 export function validateQaContext(
   context: QaContext,
-  lookups: { section: SectionLookup; frame: FrameLookup; segmentCount: number },
+  lookups: { section: SectionLookup; frame: FrameLookup; segment: SegmentLookup },
 ): void {
   if (!context || typeof context !== "object") {
     throw new QaContextError("锚点格式不合法", "context");
@@ -90,7 +92,6 @@ export function validateQaContext(
     if (
       !Number.isInteger(context.segmentIndex) ||
       context.segmentIndex < 0 ||
-      context.segmentIndex >= lookups.segmentCount ||
       typeof context.quote !== "string" ||
       context.quote.length === 0
     ) {
@@ -98,6 +99,12 @@ export function validateQaContext(
     }
     if (context.quote.length > MAX_QUOTE_CHARS) {
       throw new QaContextError(`选段不能超过 ${MAX_QUOTE_CHARS} 字`, "context.quote");
+    }
+    // 与 section 分支同强度：quote 必须能在目标段文本中找到，防止伪造文稿选段
+    const segment = lookups.segment(context.segmentIndex);
+    if (!segment) throw new QaContextError("文稿锚点指向不存在的段", "context");
+    if (!segment.text.startsWith(context.quote) && !segment.text.includes(context.quote)) {
+      throw new QaContextError("选段内容与文稿不符", "context.quote");
     }
     return;
   }
@@ -129,6 +136,8 @@ export interface QaMessage {
   context: QaContext | null;
   /** 仅 assistant 行失败时 */
   error: string | null;
+  /** 请求追踪编号（失败卡排障用；成功轮不展示） */
+  requestId: string | null;
 }
 
 interface QaRow {
@@ -143,6 +152,7 @@ interface QaRow {
   status: string | null;
   context: string | null;
   error: string | null;
+  request_id: string | null;
 }
 
 function toMessage(row: QaRow): QaMessage {
@@ -158,11 +168,28 @@ function toMessage(row: QaRow): QaMessage {
     status: (row.status as QaTurnStatus | null) ?? null,
     context: row.context ? (JSON.parse(row.context) as QaContext) : null,
     error: row.error,
+    requestId: row.request_id,
   };
 }
 
 export class QaStore {
+  /** 会话级互斥：同任务在途问答（提问/重答）的占位表，进程内内存态。
+   *  用于 POST /qa 与 retry 的并发互斥，占位先于任何 await，消除校验 TOCTOU。 */
+  private readonly inFlightTasks = new Set<string>();
+
   constructor(private readonly db: Db) {}
+
+  markInFlight(taskId: string): void {
+    this.inFlightTasks.add(taskId);
+  }
+
+  markSettled(taskId: string): void {
+    this.inFlightTasks.delete(taskId);
+  }
+
+  hasInFlight(taskId: string): boolean {
+    return this.inFlightTasks.has(taskId);
+  }
 
   add(input: {
     taskId: string;
@@ -173,6 +200,7 @@ export class QaStore {
     turnId?: string | null;
     status?: QaTurnStatus | null;
     context?: QaContext | null;
+    requestId?: string | null;
   }): QaMessage {
     const message: QaMessage = {
       id: randomUUID(),
@@ -186,11 +214,12 @@ export class QaStore {
       status: input.status ?? null,
       context: input.context ?? null,
       error: null,
+      requestId: input.requestId ?? null,
     };
     this.db
       .prepare(
-        `INSERT INTO qa_messages (id, task_id, role, content, citations, limitations, created_at, turn_id, status, context, error)
-         VALUES (@id, @taskId, @role, @content, @citations, @limitations, @createdAt, @turnId, @status, @context, @error)`,
+        `INSERT INTO qa_messages (id, task_id, role, content, citations, limitations, created_at, turn_id, status, context, error, request_id)
+         VALUES (@id, @taskId, @role, @content, @citations, @limitations, @createdAt, @turnId, @status, @context, @error, @requestId)`,
       )
       .run(
         bind({
@@ -203,21 +232,26 @@ export class QaStore {
     return message;
   }
 
-  /** 轮状态回写：服务端 abort / 失败 / 完成时落终态（写状态的动作在服务端，不依赖客户端活着） */
-  updateStatus(id: string, patch: { status: QaTurnStatus; error?: string | null }): void {
+  /** 轮状态回写：服务端 abort / 失败时落终态（写状态的动作在服务端，不依赖客户端活着）。
+   *  仅 streaming 行可写：终态（canceled/failed/completed）不可被后续回写覆盖，
+   *  避免「停止刚落 canceled、完成回写又改成 completed」的竞态。 */
+  updateStatus(id: string, patch: { status: QaTurnStatus; error?: string | null; requestId?: string | null }): void {
     this.db
-      .prepare("UPDATE qa_messages SET status = @status, error = COALESCE(@error, error) WHERE id = @id")
-      .run(bind({ id, status: patch.status, error: patch.error ?? null }));
+      .prepare(
+        "UPDATE qa_messages SET status = @status, error = COALESCE(@error, error), request_id = COALESCE(@requestId, request_id) WHERE id = @id AND status = 'streaming'",
+      )
+      .run(bind({ id, status: patch.status, error: patch.error ?? null, requestId: patch.requestId ?? null }));
   }
 
-  /** 完成回写：把 streaming 行填充为终态正文，返回 assistant 消息 */
+  /** 完成回写：把 streaming 行填充为终态正文，返回 assistant 消息。
+   *  仅 streaming 行可写，返回 null 表示该行已被停止/失败落成终态（不覆盖）。 */
   finishStreaming(
     id: string,
     patch: { content: string; citations: QaCitation[]; limitations: string[] },
-  ): QaMessage {
-    this.db
+  ): QaMessage | null {
+    const changed = this.db
       .prepare(
-        "UPDATE qa_messages SET content = @content, citations = @citations, limitations = @limitations, status = 'completed', error = NULL WHERE id = @id",
+        "UPDATE qa_messages SET content = @content, citations = @citations, limitations = @limitations, status = 'completed', error = NULL WHERE id = @id AND status = 'streaming'",
       )
       .run(
         bind({
@@ -227,6 +261,7 @@ export class QaStore {
           limitations: JSON.stringify(patch.limitations),
         }),
       );
+    if (changed.changes === 0) return null;
     const row = this.db.prepare("SELECT * FROM qa_messages WHERE id = ?").get(id) as unknown as QaRow;
     return toMessage(row);
   }
@@ -254,7 +289,7 @@ export class QaStore {
     // 老数据无 turn_id：允许用 assistant 行 id 定位该轮
     const anchor = this.db
       .prepare("SELECT * FROM qa_messages WHERE task_id = ? AND id = ? AND role = 'assistant'")
-      .get(taskId, turnId) as QaRow | undefined;
+      .get(taskId, turnId) as unknown as QaRow | undefined;
     if (!anchor) return [];
     const all = this.listForTask(taskId);
     const idx = all.findIndex((m) => m.id === anchor.id);
@@ -286,6 +321,18 @@ export class QaStore {
   removeAllForTask(taskId: string): void {
     this.db.prepare("DELETE FROM qa_messages WHERE task_id = ?").run(taskId);
   }
+}
+
+/**
+ * 在途问答轮登记（进程内内存态）：streaming 行不一定是僵尸——本进程正在回答的轮
+ * 也是 streaming。GET 读投影据此区分「在途」与「断连遗留」，避免把正在回答的轮
+ * 误投影成 canceled + retryable。服务重启后登记自然为空，streaming 行回落僵尸语义。
+ * 由 QaService.ask 在启动/结束时登记与注销。
+ */
+const inFlightTurns = new Set<string>();
+
+export function isTurnInFlight(turnId: string): boolean {
+  return inFlightTurns.has(turnId);
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +438,9 @@ const QA_SYSTEM =
   "你是视频内容助手。只依据提供的转写段落回答；每个关键结论后用 [[tNN]] 标注来源编号（编号来自给定目录）。" +
   "不确定或转写稿没有覆盖的内容，写进 limitations 而不是猜测。不使用表情符号，输出严格 JSON。";
 
+/** 失败轮落库/对外展示的统一文案：内部细节（URL、路径、依赖名）只进日志 */
+const QA_FAILURE_MESSAGE = "回答失败，请稍后重试或重新提问";
+
 export interface QaServiceOptions {
   store: QaStore;
   llm: LLMProvider;
@@ -420,6 +470,21 @@ export class QaService {
 
     const startedAt = Date.now();
     const turnId = input.turnId ?? randomUUID();
+    // 登记在途轮：GET 读投影据此不把正在回答的轮投影成僵尸 canceled
+    inFlightTurns.add(turnId);
+    try {
+      return await this.runAsk(input, question, startedAt, turnId);
+    } finally {
+      inFlightTurns.delete(turnId);
+    }
+  }
+
+  private async runAsk(
+    input: AskInput,
+    question: string,
+    startedAt: number,
+    turnId: string,
+  ): Promise<{ message: QaMessage; answer: QaAnswer; turnId: string }> {
     this.opts.store.add({
       taskId: input.taskId,
       role: "user",
@@ -529,6 +594,7 @@ export class QaService {
       content: "",
       turnId,
       status: "streaming",
+      requestId: input.traceId ?? null,
     });
 
     let attempt: Awaited<ReturnType<typeof runOnce>>;
@@ -550,7 +616,15 @@ export class QaService {
       const canceled = input.signal?.aborted === true || message.includes("已取消") || message.includes("已中止");
       this.opts.store.updateStatus(streamingRow.id, {
         status: canceled ? "canceled" : "failed",
-        error: canceled ? null : message.slice(0, 200),
+        // 内部错误细节只进日志；对外文案固定，避免上游 URL/路径泄露给客户端
+        error: canceled ? null : QA_FAILURE_MESSAGE,
+        requestId: input.traceId ?? null,
+      });
+      logError("qa turn failed", {
+        task_id: input.taskId,
+        trace_id: input.traceId,
+        turn_id: turnId,
+        detail: message.slice(0, 200),
       });
       throw err;
     }
@@ -565,23 +639,34 @@ export class QaService {
       limitations.push(`已移除 ${attempt.invalidTokens.length} 个无法核实的出处编号`);
     }
 
-    const message = this.opts.store.finishStreaming(streamingRow.id, {
+    // 完成回写：仅当该轮仍为 streaming 时生效；停止端点已落 canceled 时
+    // 返回 null，此时不覆盖服务端已定的终态，直接走取消语义
+    const completed = this.opts.store.finishStreaming(streamingRow.id, {
       content: text,
       citations: attempt.valid,
       limitations,
     });
+    if (!completed || input.signal?.aborted === true) {
+      logInfo("qa answer superseded after completion", {
+        task_id: input.taskId,
+        trace_id: input.traceId,
+        turn_id: turnId,
+        superseded: completed === null ? "terminal-state" : "aborted",
+      });
+      throw new Error("请求已取消");
+    }
     logInfo("qa answer completed", {
       task_id: input.taskId,
       trace_id: input.traceId,
       turn_id: turnId,
-      message_id: message.id,
+      message_id: completed.id,
       citations: attempt.valid.length,
       invalid_citations: attempt.invalidTokens.length,
       limitations: limitations.length,
       chars: text.length,
       duration_ms: elapsedMs(startedAt),
     });
-    return { message, answer: { text, citations: attempt.valid, limitations }, turnId };
+    return { message: completed, answer: { text, citations: attempt.valid, limitations }, turnId };
   }
 }
 

@@ -245,7 +245,7 @@ describe("轮模型（09 号票 P3）", () => {
     expect(user.turnId).toBe(assistant.turnId);
   });
 
-  it("上游失败：assistant 行落 failed 并带错误信息", async () => {
+  it("上游失败：assistant 行落 failed，对外文案固定不透出内部细节", async () => {
     const store = new QaStore(db);
     const svc = new QaService({
       store,
@@ -261,7 +261,9 @@ describe("轮模型（09 号票 P3）", () => {
 
     const [, assistant] = store.listForTask("turn-task-3");
     expect(assistant.status).toBe("failed");
-    expect(assistant.error).toContain("500");
+    // 原始错误只进日志；落库 error 是统一文案，避免内部细节透出客户端
+    expect(assistant.error).toBe("回答失败，请稍后重试或重新提问");
+    expect(assistant.error).not.toContain("500");
   });
 
   it("lastTurn/getTurn 定位最后一轮；重答以新 turn 追加，旧轮保留", async () => {
@@ -276,9 +278,23 @@ describe("轮模型（09 号票 P3）", () => {
     });
     expect(second.turnId).toBe(first.turnId);
 
-    // 手动把最后一轮改成 canceled 模拟中断
+    // 手动把最后一轮改成 canceled 模拟中断（updateStatus 仅 streaming 行可写；
+    // 该 assistant 行已被 finishStreaming 落成 completed，这里用原始 SQL 模拟
+    // 服务重启遗留/历史上仍允许写的路径，落一个 canceled 的最后一轮）
     const lastAssistant = store.lastTurn("turn-task-4").find((m) => m.role === "assistant")!;
-    store.updateStatus(lastAssistant.id, { status: "canceled" });
+    db.prepare("UPDATE qa_messages SET status = 'canceled' WHERE id = ?").run(lastAssistant.id);
+    expect(store.lastTurn("turn-task-4")[1].status).toBe("canceled");
+
+    // 终态行不可再被状态回写覆盖：防止停止落 canceled 后被 completed 覆盖
+    store.updateStatus(lastAssistant.id, { status: "completed" });
+    expect(store.lastTurn("turn-task-4")[1].status).toBe("canceled");
+    const overwritten = store.finishStreaming(lastAssistant.id, {
+      content: "不该写入",
+      citations: [],
+      limitations: [],
+    });
+    expect(overwritten).toBeNull();
+    expect(store.lastTurn("turn-task-4")[1].status).toBe("canceled");
 
     expect(store.lastTurn("turn-task-4").map((m) => m.role)).toEqual(["user", "assistant"]);
     // 两问共用同一个 turnId，getTurn 返回全部 4 行
@@ -317,7 +333,7 @@ describe("锚点校验（09 号票 P1/P2 服务端白名单）", () => {
     section: (id: string) =>
       id === "s1" ? { blocks: [{ text: "神经网络的基础结构是分层处理" }] } : null,
     frame: (id: string) => (id === "f01" ? { id: "f01", tSec: 3 } : null),
-    segmentCount: TRANSCRIPT.segments.length,
+    segment: (index: number) => TRANSCRIPT.segments[index] ?? null,
   };
 
   it("section 锚点：quote 是块文本前缀或包含时通过", () => {
@@ -360,10 +376,14 @@ describe("锚点校验（09 号票 P1/P2 服务端白名单）", () => {
     ).toThrow(/不存在/);
   });
 
-  it("transcript 锚点：段下标越界拒绝；frame 锚点不在目录内拒绝", () => {
+  it("transcript 锚点：quote 与段文本核对，伪造内容/段越界拒绝", () => {
     expect(() =>
       validateQaContext({ kind: "transcript", segmentIndex: 0, quote: "今天我们讲" }, lookups),
     ).not.toThrow();
+    // quote 不在目标段文本中：伪造选段拒绝
+    expect(() =>
+      validateQaContext({ kind: "transcript", segmentIndex: 0, quote: "凭空捏造的内容" }, lookups),
+    ).toThrow(/与文稿不符/);
     expect(() =>
       validateQaContext({ kind: "transcript", segmentIndex: 99, quote: "x" }, lookups),
     ).toThrow();

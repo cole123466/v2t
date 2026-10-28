@@ -38,12 +38,21 @@ export async function POST(
     return Response.json({ error: "该轮已完成，无需重新回答" }, { status: 409 });
   }
 
+  // 会话级互斥占位：同任务已有在途问答（提问或重答）则拒绝。
+  // 占位先于后续 await 与 SSE 启动，消除 last-turn 校验的 TOCTOU——
+  // 并发 retry/新提问只有一个能拿到占位，其余 409。
+  if (rt.qa.hasInFlight(id)) {
+    return Response.json({ error: "已有回答正在进行，请稍候" }, { status: 409 });
+  }
+  rt.qa.markInFlight(id);
+
   let transcript: Transcript;
   try {
     transcript = JSON.parse(
       await readFile(transcriptPath(taskDir(rt.dataDir, id)), "utf8"),
     ) as Transcript;
   } catch {
+    rt.qa.markSettled(id);
     return Response.json({ error: "转录稿缺失" }, { status: 409 });
   }
 
@@ -81,6 +90,7 @@ export async function POST(
           signal: abort.signal,
           onDelta: (delta) => send("delta", { delta }),
         });
+        rt.qa.markSettled(id);
         rt.activities.finish(activity.id, {
           ok: true,
           status: "completed",
@@ -90,13 +100,20 @@ export async function POST(
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const canceled = abort.signal.aborted || message.includes("已取消") || message.includes("已中止");
+        rt.qa.markSettled(id);
         rt.activities.finish(activity.id, {
           ok: false,
           status: canceled ? "canceled" : "failed",
           message: message.slice(0, 200),
         });
         const newTurnId = rt.qa.lastTurn(id).find((m) => m.role === "user")?.turnId ?? null;
-        send("error", { turnId: newTurnId, message, request_id: traceId, code: canceled ? "canceled" : "failed" });
+        // 原始错误细节只进日志/activities；SSE 面向客户端，用固定文案避免泄露内部信息
+        send("error", {
+          turnId: newTurnId,
+          message: canceled ? "已停止回答" : "回答失败，请稍后重试或重新提问",
+          request_id: traceId,
+          code: canceled ? "canceled" : "failed",
+        });
       } finally {
         try {
           controller.close();

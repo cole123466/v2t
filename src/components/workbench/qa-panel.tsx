@@ -12,6 +12,8 @@ interface QaTurnAnswer {
   citations: Array<{ segmentIndex: number; start: number; end: number; quote: string }> | null;
   limitations: string[] | null;
   error: string | null;
+  /** 该轮失败时的请求追踪编号（服务端落库投影），排障用 */
+  requestId: string | null;
 }
 
 interface QaTurn {
@@ -33,6 +35,8 @@ export function QaPanel({
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 最近一次请求的追踪编号：仅用于本次会话的错误横幅，
+  // 历史失败轮的编号由服务端投影（answer.requestId）提供
   const [requestId, setRequestId] = useState<string | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   const [streamText, setStreamText] = useState("");
@@ -125,15 +129,15 @@ export function QaPanel({
         signal: abort.signal,
       });
       const outcome = await consumeStream(res, () => abort.signal.aborted);
-      if (outcome === "aborted") {
-        // 已停止：保留正文由服务端状态决定，刷新拿到 canceled 轮
-        await refresh();
-      }
+      // 轮状态在服务端落定（done→completed、断流→canceled/failed）：
+      // 无论哪种结局都刷新，把终态轮换回列表，流式正文随 finally 清空不丢内容
+      if (outcome !== "aborted") await refresh();
     } catch (err) {
       if (abort.signal.aborted) {
         await refresh();
       } else {
         setError(err instanceof Error ? err.message : String(err));
+        await refresh();
       }
     } finally {
       abortRef.current = null;
@@ -226,7 +230,7 @@ export function QaPanel({
                     <X className="mt-0.5 size-3 shrink-0" strokeWidth={1.5} />
                     <span className="min-w-0 break-words">
                       {turn.answer.error ?? "回答失败"}
-                      <RequestIdLine id={requestId} />
+                      <RequestIdLine id={turn.answer.requestId} />
                     </span>
                   </div>
                 ) : null}
