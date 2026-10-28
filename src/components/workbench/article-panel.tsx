@@ -16,6 +16,7 @@ import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
 import type { TaskDetailLevel } from "@/server/tasks";
 import { DETAIL_OPTIONS } from "@/lib/article-options";
 import { ArticleBlockView, InlineText } from "./article-block";
+import { ReviewSidebar } from "./review-sidebar";
 import { SelectionPopover } from "./selection-popover";
 import { RequestIdLine } from "./request-id";
 import { MindOverview } from "./mind-overview";
@@ -57,6 +58,8 @@ export function ArticlePanel({
   const [shareOpen, setShareOpen] = useState(false);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
   const abortRef = useRef<AbortController | null>(null);
+  // 审稿旁栏「查看对应章节」的容器内定位句柄
+  const articleScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     return () => abortRef.current?.abort();
@@ -517,7 +520,19 @@ export function ArticlePanel({
       ) : null}
 
       {active?.content ? (
-        <div ref={contentRef} className="glass relative min-h-0 flex-1 overflow-auto rounded-2xl p-6">
+        <ReviewSidebar
+          taskId={taskId}
+          articleId={active.id}
+          articleReady={active.status === "done"}
+          scrollRef={articleScrollRef}
+        />
+      ) : null}
+
+      {active?.content ? (
+        <div
+          ref={contentRef}
+          className="glass relative min-h-0 flex-1 overflow-auto rounded-2xl p-6"
+        >
           {onAskSection ? (
             <SelectionPopover
               containerRef={contentRef}

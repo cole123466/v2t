@@ -236,6 +236,7 @@ export class JobStore {
     const running = many<JobRow>(this.db.prepare("SELECT * FROM jobs WHERE status = 'running'").all());
     if (running.length === 0) return 0;
     const now = new Date().toISOString();
+    const reviewJobIds: string[] = [];
     for (const row of running) {
       const job = toRecord(row);
       const done = this.db
@@ -267,6 +268,20 @@ export class JobStore {
           )
           .run({ articleId: job.articleId, error: `服务重启导致中断，已保存 ${done.n}/${total.n} 章` });
       }
+      // 10 号票：review job 的中断折算——review 行置 failed（不自动重跑，R1 手动语义），
+      // 文章正文不受影响；收集 id 后在循环外批量更新（Rule 1：循环体内不执行查询）
+      if (job.kind === "review") {
+        reviewJobIds.push(job.id);
+      }
+    }
+    if (reviewJobIds.length > 0) {
+      const placeholders = reviewJobIds.map(() => "?").join(", ");
+      this.db
+        .prepare(
+          `UPDATE article_reviews SET status = 'failed', error = ?, updated_at = ?
+           WHERE job_id IN (${placeholders}) AND status IN ('queued', 'running')`,
+        )
+        .run("服务重启导致审核中断", now, ...reviewJobIds);
     }
     logWarn("jobs reaped on startup", { count: running.length });
     return running.length;

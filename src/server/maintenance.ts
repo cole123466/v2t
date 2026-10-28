@@ -9,6 +9,7 @@ import { audioPath, sourcePath, taskDir } from "./paths";
 import { shareDir } from "./shares";
 import type { JobStore } from "./jobs";
 import type { QaStore } from "./qa";
+import type { ReviewStore } from "./reviews";
 import type { ShareStore } from "./shares";
 import type { TaskStore } from "./tasks";
 
@@ -20,6 +21,7 @@ export interface MaintenanceDeps {
   activities?: ActivityStore;
   qa?: QaStore;
   jobs?: JobStore;
+  reviews?: ReviewStore;
   shares?: ShareStore;
 }
 
@@ -82,6 +84,7 @@ export async function deleteTask(deps: MaintenanceDeps, id: string): Promise<boo
   deps.articles?.removeAllForTask(id);
   // jobs 先于 activities 删（父概念在前，便于将来加外键；14 号票）
   deps.jobs?.removeAllForTask(id);
+  deps.reviews?.removeAllForTask(id);
   deps.activities?.removeAllForTask(id);
   deps.qa?.removeAllForTask(id);
   return true;
