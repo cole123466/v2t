@@ -5,7 +5,9 @@ import { ArticleService, ArticleStore } from "./articles";
 import { createSiliconFlowAsr } from "./asr";
 import { getAsrChunkSeconds, getDataDir, getRetentionDays } from "./config";
 import { openDb, type Db } from "./db";
+import { applyDataFixes } from "./migration";
 import { GenerationService, GenerationStore } from "./generations";
+import { JobStore } from "./jobs";
 import { createOpenAiCompatibleLlm } from "./llm";
 import { failOrphanTasks, purgeExpiredMedia, type MaintenanceDeps } from "./maintenance";
 import { QaService, QaStore } from "./qa";
@@ -23,6 +25,7 @@ export interface Runtime extends MaintenanceDeps {
   articles: ArticleStore;
   articleService: ArticleService;
   activities: ActivityStore;
+  jobs: JobStore;
   qa: QaStore;
   qaService: QaService;
   dataDir: string;
@@ -71,6 +74,8 @@ export function getRuntime(): Runtime {
     const dataDir = getDataDir();
     mkdirSync(path.join(dataDir, "tasks"), { recursive: true });
     const db = openDb(path.join(dataDir, "v2t.db"));
+    // 一次性数据改判必须先于任何后台执行启动（14 号票）
+    applyDataFixes(db);
     const store = new TaskStore(db);
     const source = createYtDlpProvider();
     const runner = new TaskRunner({
@@ -85,6 +90,7 @@ export function getRuntime(): Runtime {
     const generationService = new GenerationService({ store: generations, llm });
     const articles = new ArticleStore(db);
     const activities = new ActivityStore(db);
+    const jobs = new JobStore(db);
     const articleService = new ArticleService({
       store: articles,
       llm,
@@ -107,6 +113,7 @@ export function getRuntime(): Runtime {
       articles,
       articleService,
       activities,
+      jobs,
       qa,
       qaService,
       dataDir,
@@ -125,7 +132,7 @@ export function getRuntime(): Runtime {
     if (orphans > 0) logWarn("orphan tasks marked failed", { count: orphans });
 
     // 媒体保留期清理：启动时一次 + 每日一次（转录与文案永久保留）
-    const deps: MaintenanceDeps = { store, generations, articles, activities, qa, dataDir };
+    const deps: MaintenanceDeps = { store, generations, articles, activities, qa, jobs, dataDir };
     const runPurge = () =>
       purgeExpiredMedia(deps, { retentionDays: getRetentionDays() })
         .then((count) => {

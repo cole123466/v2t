@@ -22,7 +22,7 @@ export type ArticleDetailLevel = "concise" | "standard" | "detailed";
 export interface ArticleRecord {
   id: string;
   taskId: string;
-  status: "streaming" | "done" | "failed";
+  status: "streaming" | "done" | "failed" | "interrupted";
   title: string | null;
   /** 完整文章 JSON（成功后才有） */
   content: Article | null;
