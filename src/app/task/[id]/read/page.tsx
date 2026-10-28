@@ -27,7 +27,8 @@ export default function TaskReadPage() {
   useEffect(() => {
     void fetch("/api/tasks/" + id)
       .then((r) => (r.ok ? r.json() : null))
-      .then((t) => (t ? setTask(t) : setMissing(true)));
+      .then((t) => (t ? setTask(t) : setMissing(true)))
+      .catch(() => setMissing(true));
     const es = new EventSource("/api/tasks/" + id + "/events");
     es.onmessage = (e) => setTask(JSON.parse(e.data) as Task);
     return () => es.close();
