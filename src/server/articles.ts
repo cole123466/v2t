@@ -947,6 +947,16 @@ export class ArticleService {
     // 未支持条目按重写后正文重新抽取：重写可能增删/替换引用编号，
     // 不能拿原始 pairs 的索引去映射，否则会标注错位
     const rewrittenPairs = collectVerifyPairs({ blocks: rewrittenBlocks }, input.catalog);
+    // 重写把引用删光 = 留下无出处的断言，比标注更糟（票15底线）。
+    // judge 对空配对恒判全绿（parseVerifyResults 按 count=0 返回空），
+    // 会把无引用版本当重写通过整章替换——此处拒绝重写，退回原文按首轮 failed 标注
+    if (rewrittenPairs.length === 0) {
+      return {
+        note: `${failed.length} 处未支持，重写删光了引用，已按原文标注`,
+        unsupported: pairs.filter((_, idx) => failed.some((r) => r.index === idx)),
+        blocks: input.blocks,
+      };
+    }
     const retryResults = await judge(rewrittenBlocks);
     const stillFailed = retryResults.filter((r) => r.verdict === "unsupported");
     if (stillFailed.length === 0) {

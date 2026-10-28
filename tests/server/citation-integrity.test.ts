@@ -260,6 +260,36 @@ describe("语义核对（C4/C6/C7）", () => {
     expect(verifyStep?.message).toContain("已标注");
   });
 
+  it("验收4c：重写删光引用 → 拒绝重写，按原文标注（不出无出处断言）", async () => {
+    const store = new ArticleStore(db);
+    const activities = new ActivityStore(db);
+    const llm = verifyLlm({
+      section: () => SECTION_BAD,
+      verify: () => VERIFY_RESULTS(["unsupported"]),
+      // 重写投机取巧：把引用删光让核对"全绿"——必须被守卫拒绝
+      rewrite: () =>
+        JSON.stringify({
+          id: "s1",
+          title: "第1章",
+          blocks: [{ type: "paragraph", text: "开场介绍了量子纠错的前沿进展。" }],
+        }),
+    });
+    const svc = new ArticleService({ store, llm, activities });
+    const record = await svc.generate({ taskId: "t-v4c", catalog: CATALOG, frameFiles: new Map() });
+    expect(record.status).toBe("done");
+    // 守卫拒绝后不再发第二次核对，重写恰好 1 次
+    expect(llm.verifyCalls()).toBe(1);
+    expect(llm.rewriteCalls()).toBe(1);
+    // 保留原文（含原引用），引用后带标注 + limitations——绝不出无引用版本
+    const text = JSON.stringify(record.content);
+    expect(text).toContain("[[t01]]");
+    expect(text).toContain("出处未核实");
+    expect((record.content?.limitations ?? []).length).toBeGreaterThan(0);
+    const verifyStep = activities.listForTask("t-v4c").find((a) => a.kind === "verify");
+    expect(verifyStep?.status).toBe("completed");
+    expect(verifyStep?.message).toContain("已按原文标注");
+  });
+
   it("验收5：verify 步骤落库且 title 含章节号、message 与结论一致", async () => {
     const store = new ArticleStore(db);
     const activities = new ActivityStore(db);
