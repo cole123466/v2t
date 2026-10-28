@@ -46,6 +46,18 @@ describe("looseJsonBody 缺逗号修复", () => {
     expect(out.b).toBe(1);
   });
 
+  it("key 内含未转义引号时不插逗号（只靠引号修复收口，不改坏字段名）", () => {
+    // 审查确认缺陷：{"x":0,"a"b"c":1} 曾被插成 {"x":0,"a"b,"c":1}，字段名被静默篡改
+    const out = parse<{ x: number }>('{ "x":0,"a"b"c":1 }');
+    expect(out.x).toBe(0);
+    expect(Object.keys(out)).toContain('a"b"c');
+  });
+
+  it("true/false/null 之后漏逗号仍正常补", () => {
+    expect(parse('{"a": null\n"b": 2}')).toEqual({ a: null, b: 2 });
+    expect(parse('{"a": false\n"b": 2}')).toEqual({ a: false, b: 2 });
+  });
+
   it("端到端：围栏 + 前后杂文 + 缺逗号", () => {
     const raw = [
       "好的，以下是提纲：",

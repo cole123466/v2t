@@ -617,7 +617,9 @@ function insertMissingCommas(body: string): string {
       let p = out.length - 1;
       while (p >= 0 && /\s/.test(out[p])) p--;
       const prev = p >= 0 ? out[p] : "";
-      if (p >= 0 && prev !== "," && /["\}\]0-9a-z]/i.test(prev)) {
+      // 裸字母只认 true/false/null 的尾字母（e/l）：更宽的 [a-z] 会把
+      // "key"内含未转义引号的裸字母误判成值结尾，把逗号插进 key 里改坏字段名
+      if (p >= 0 && prev !== "," && /["\}\]0-9eElL]/.test(prev)) {
         // 补一个逗号并保留原有缩进排版
         out += ",";
       }
