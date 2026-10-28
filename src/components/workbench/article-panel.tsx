@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   Archive,
-  ChevronRight,
   Download,
   FileDown,
   FileText,
@@ -13,62 +12,15 @@ import {
   RotateCcw,
   X,
 } from "lucide-react";
-import type { MindMapNode } from "@/server/article";
 import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
 import type { TaskDetailLevel } from "@/server/tasks";
 import { DETAIL_OPTIONS } from "@/lib/article-options";
 import { ArticleBlockView, InlineText } from "./article-block";
 import { RequestIdLine } from "./request-id";
+import { MindOverview } from "./mind-overview";
+import { scrollToSection, useContainerSpy } from "@/lib/container-spy";
 import { ShareDialog } from "./share-dialog";
 import { petFlow } from "@/components/pet/pet-flow";
-
-function MindMapTree({
-  nodes,
-  activeSection,
-  onJump,
-}: {
-  nodes: MindMapNode[];
-  activeSection: string | null;
-  onJump: (sectionId: string) => void;
-}) {
-  return (
-    <ul className="space-y-1.5">
-      {nodes.map((node, i) => (
-        <li key={i}>
-          <button
-            type="button"
-            disabled={!node.sectionId}
-            onClick={() => node.sectionId && onJump(node.sectionId)}
-            className={`flex w-full items-start gap-1.5 rounded-lg px-2 py-1 text-left text-xs transition-colors ${
-              node.sectionId
-                ? activeSection === node.sectionId
-                  ? "bg-gold/10 text-gold"
-                  : "text-paper-dim hover:bg-tint/5 hover:text-paper"
-                : "text-paper-faint"
-            }`}
-          >
-            {node.sectionId ? (
-              <ChevronRight className="mt-0.5 size-3 shrink-0" strokeWidth={1.5} />
-            ) : (
-              <span className="mt-1.5 size-1 shrink-0 rounded-full bg-tint/20" />
-            )}
-            <span>{node.label}</span>
-          </button>
-          {node.children?.length ? (
-            <div className="ml-3 border-l border-tint/5 pl-1">
-              <MindMapTree
-                nodes={node.children}
-                activeSection={activeSection}
-                onJump={onJump}
-              />
-            </div>
-          ) : null}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 
 export function ArticlePanel({
   taskId,
@@ -96,6 +48,8 @@ export function ArticlePanel({
   const [shareOpen, setShareOpen] = useState(false);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
   const abortRef = useRef<AbortController | null>(null);
+  // 正文滚动容器：window 不滚，导图联动与章节定位都基于它（06 号票 K3）
+  const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     return () => abortRef.current?.abort();
@@ -168,6 +122,12 @@ export function ArticlePanel({
     articles.find((a) => a.status === "done") ??
     articles.find((a) => a.status === "streaming") ??
     articles.find((a) => a.status === "interrupted");
+
+  const sectionIds = useMemo(
+    () => active?.content?.sections.map((s) => s.id) ?? [],
+    [active],
+  );
+  const activeSection = useContainerSpy(contentRef, sectionIds);
 
   const seek = (t: number) => {
     const video = videoRef.current;
@@ -550,7 +510,7 @@ export function ArticlePanel({
       ) : null}
 
       {active?.content ? (
-        <div className="glass min-h-0 flex-1 overflow-auto rounded-2xl p-6">
+        <div ref={contentRef} className="glass min-h-0 flex-1 overflow-auto rounded-2xl p-6">
           {/* 正文限宽：过宽的行长会让阅读跳行，正文区在宽屏下居中 */}
           <div className="mx-auto w-full max-w-[44rem]">
           {active.status === "streaming" ? (
@@ -572,18 +532,16 @@ export function ArticlePanel({
           </p>
 
           {active.content.mindMap.length > 0 ? (
-            <div className="mt-5 rounded-xl border border-tint/5 bg-tint/[0.02] p-3">
-              <p className="mb-2 font-mono text-[10px] tracking-widest text-paper-faint">内容导图</p>
-              <MindMapTree
-                nodes={active.content.mindMap}
-                activeSection={null}
-                onJump={(sectionId) => {
-                  document
-                    .getElementById(`section-${sectionId}`)
-                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
-                }}
-              />
-            </div>
+            <MindOverview
+              nodes={active.content.mindMap}
+              title={active.content.title}
+              sectionIds={sectionIds}
+              activeSection={activeSection}
+              onJump={(sectionId) => {
+                const container = contentRef.current;
+                if (container) scrollToSection(container, sectionId);
+              }}
+            />
           ) : null}
 
           <div className="mt-6 space-y-9">
