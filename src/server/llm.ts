@@ -22,15 +22,18 @@ export function createOpenAiCompatibleLlm(): LLMProvider {
       onChunk: (delta: string) => void,
       meta?: LLMCallMeta,
     ): Promise<string> {
-      // 个别模型只输出思维链不出正文：自动重试一次，仍为空才报错
+      // 个别模型只输出思维链不出正文、或到上游的网络瞬断（ETIMEDOUT 等）：
+      // 自动重试一次，仍失败才报错。上游 5xx/429 交给调用方感知，不在本层静默重试
       let lastError: Error | null = null;
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           return await streamOnce(messages, onChunk, meta);
         } catch (err) {
           lastError = err instanceof Error ? err : new Error(String(err));
-          if (!/没有返回正文内容/.test(lastError.message)) throw lastError;
-          logWarn("model response empty; retrying", {
+          const empty = /没有返回正文内容/.test(lastError.message);
+          const transient = /fetch failed|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|network/i.test(lastError.message);
+          if (!empty && !transient) throw lastError;
+          logWarn(empty ? "model response empty; retrying" : "model request transient failure; retrying", {
             provider: "llm",
             operation: meta?.operation,
             task_id: meta?.taskId,
