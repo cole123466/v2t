@@ -1004,7 +1004,7 @@ export class ArticleService {
       return parseVerifyResults(raw, currentPairs.length);
     };
 
-    let results = await judge(input.blocks);
+    const results = await judge(input.blocks);
     const failed = results.filter((r) => r.verdict === "unsupported");
     if (failed.length === 0) {
       const partial = results.filter((r) => r.verdict === "partial");

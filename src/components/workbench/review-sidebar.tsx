@@ -60,7 +60,6 @@ export function ReviewSidebar({
   const loadedRef = useRef<string | null>(null);
   // 竞态防护：切文章后旧文章的在途响应作废
   const articleIdRef = useRef(articleId);
-  articleIdRef.current = articleId;
 
   const load = async () => {
     const current = articleIdRef.current;
@@ -73,6 +72,7 @@ export function ReviewSidebar({
 
   // 换文章时重新拉取；刷新页面后从持久化记录恢复状态
   useEffect(() => {
+    articleIdRef.current = articleId;
     if (loadedRef.current === articleId) return;
     loadedRef.current = articleId;
     setReviews([]);
