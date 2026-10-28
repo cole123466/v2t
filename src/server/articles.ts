@@ -14,6 +14,7 @@ import {
   validateCitations,
   validateStructure,
   type Article,
+  type ArticleBlock,
   type ArticleDraftOutline,
   type ArticleSection,
   type CitationCatalog,
@@ -453,21 +454,47 @@ export class ArticleService {
         input.hooks?.onOutline?.(outline);
       } else {
         const outlineAt = Date.now();
-        const outlineRaw = await this.opts.llm.generate(
-          [
+        // 提纲解析失败（模型偶发产出坏 JSON）时追加纠正提示重新采样一次，
+        // 而不是让 3 分钟的等待直接报废——与章节生成的 attempt<2 重试同一策略
+        let outlineError: Error | null = null;
+        let outlineParsed: ArticleDraftOutline | null = null;
+        for (let attempt = 0; attempt < 2 && !outlineParsed; attempt++) {
+          const messages: LLMMessage[] = [
             { role: "system", content: SYSTEM_PROMPT },
             { role: "user", content: outlinePrompt(input.catalog, detail, purpose) },
-          ],
-          () => {},
-          {
-            operation: "article.outline",
-            taskId: input.taskId,
-            traceId: input.traceId,
-            signal: input.signal,
-            onModel,
-          },
-        );
-        outline = this.parseOutline(outlineRaw);
+          ];
+          if (attempt > 0) {
+            messages.push({
+              role: "user",
+              content:
+                "上一次输出不是合法 JSON。请严格只输出一个 JSON 对象（含 title 与 sections 字段），不要任何解释、前后缀或 markdown 代码块。",
+            });
+          }
+          try {
+            const outlineRaw = await this.opts.llm.generate(messages, () => {}, {
+              operation: "article.outline",
+              taskId: input.taskId,
+              traceId: input.traceId,
+              signal: input.signal,
+              onModel,
+            });
+            outlineParsed = this.parseOutline(outlineRaw);
+          } catch (err) {
+            outlineError = err instanceof Error ? err : new Error(String(err));
+            // 取消/上游 HTTP 错误不是坏 JSON：直接上抛，不做纠正提示重试
+            if (input.signal?.aborted || /请求已取消|LLM 服务返回/.test(outlineError.message)) throw outlineError;
+            logWarn("article outline retry", {
+              task_id: input.taskId,
+              trace_id: input.traceId,
+              attempt: attempt + 1,
+              reason: "invalid_json",
+            });
+          }
+        }
+        if (!outlineParsed) {
+          throw new Error(`提纲生成失败（${outlineError?.message ?? "未知原因"}），已重试一次仍失败，请重新生成`);
+        }
+        outline = outlineParsed;
         this.opts.store.update(record.id, { outline, title: outline.title });
         steps?.finish(outlineStep!.id, {
           ok: true,
@@ -711,40 +738,66 @@ export class ArticleService {
               const rewriteNote =
                 `第 ${failed.map((r) => r.index + 1).join("、")} 处引用未能支持论断，` +
                 "请改写论断或换用更贴切的引用编号；只输出 JSON（与之前相同的章节结构）。";
-              const raw = await this.opts.llm.generate(
-                [
+              // 改写输出同样偶发坏 JSON 或缺 blocks：解析+结构校验都放在循环内，
+              // 校验不过也消耗重试预算，追加纠正提示重新采样一次
+              let rewrittenBlocks: ArticleBlock[] | null = null;
+              let rewriteError: Error | null = null;
+              for (let attempt = 0; attempt < 2 && !rewrittenBlocks; attempt++) {
+                const messages: LLMMessage[] = [
                   { role: "system", content: prompt.system },
                   { role: "user", content: prompt.user },
                   { role: "user", content: rewriteNote },
-                ],
-                () => {},
-                {
-                  operation: "article.verify-rewrite",
-                  taskId: input.taskId,
-                  traceId: input.traceId,
-                  signal: input.signal,
-                  onModel,
-                },
-              );
-              const rewritten = JSON.parse(looseJsonBody(raw)) as { blocks?: unknown[] };
-              const normalized = normalizeArticle({
-                title: outline.title,
-                sections: [
-                  {
-                    id: section.id,
-                    title: parsed!.title?.trim() || section.title,
-                    blocks: rewritten.blocks ?? [],
-                  },
-                ],
-                mindMap: [],
-                limitations: [],
-              });
-              // 重写没有产出可用正文（缺 blocks 字段 / 空数组）时按核对失败处理，
-              // 调用方 catch 后保留原章节——绝不让重写把整章清空
-              if (normalized.sections[0].blocks.length === 0) {
-                throw new Error("重写结果没有正文内容");
+                ];
+                if (attempt > 0) {
+                  messages.push({
+                    role: "user",
+                    content:
+                      "上一次输出不是合法 JSON 或缺少 blocks 字段。请严格只输出 JSON 对象（含非空 blocks 字段），不要任何解释或 markdown 代码块。",
+                  });
+                }
+                try {
+                  const raw = await this.opts.llm.generate(messages, () => {}, {
+                    operation: "article.verify-rewrite",
+                    taskId: input.taskId,
+                    traceId: input.traceId,
+                    signal: input.signal,
+                    onModel,
+                  });
+                  const parsedRewrite = JSON.parse(looseJsonBody(raw)) as { blocks?: unknown[] };
+                  const normalized = normalizeArticle({
+                    title: outline.title,
+                    sections: [
+                      {
+                        id: section.id,
+                        title: parsed!.title?.trim() || section.title,
+                        blocks: parsedRewrite.blocks ?? [],
+                      },
+                    ],
+                    mindMap: [],
+                    limitations: [],
+                  });
+                  // 重写没有产出可用正文（缺 blocks 字段 / 空数组）视为校验失败，
+                  // 留在循环里重采——绝不让重写把整章清空
+                  if (normalized.sections[0].blocks.length === 0) {
+                    throw new Error("重写结果没有正文内容");
+                  }
+                  rewrittenBlocks = normalized.sections[0].blocks;
+                } catch (err) {
+                  rewriteError = err instanceof Error ? err : new Error(String(err));
+                  // 取消/上游 HTTP 错误不是坏 JSON：直接上抛，不做纠正提示重试
+                  if (input.signal?.aborted || /请求已取消|LLM 服务返回/.test(rewriteError.message)) throw rewriteError;
+                  logWarn("article rewrite retry", {
+                    task_id: input.taskId,
+                    trace_id: input.traceId,
+                    attempt: attempt + 1,
+                    reason: "invalid_json",
+                  });
+                }
               }
-              return normalized.sections[0].blocks;
+              if (!rewrittenBlocks) {
+                throw rewriteError ?? new Error("改写输出解析失败");
+              }
+              return rewrittenBlocks;
             },
           });
           if (outcome.unsupported.length > 0) {
