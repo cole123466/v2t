@@ -10,6 +10,34 @@ function pickModel(messages: LLMMessage[]): string {
   return hasImage ? getVisionModel() : getLlmConfig().model;
 }
 
+/** 瞬断类网络错误码：连接被重置/超时/对端断开，重试有意义 */
+const TRANSIENT_NET_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ECONNREFUSED",
+  "EPIPE",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+/**
+ * 网络瞬断判定：undici 连接层失败的 message 恒为 "fetch failed"（连接期）或
+ * "terminated"（流中期），真实原因（ECONNRESET/ETIMEDOUT 等）在 cause 链上，
+ * 所以必须沿 cause 链收集 code 与 message 再判断。ENOTFOUND、证书错误等
+ * 永久性失败不在瞬断集合里，不重试。
+ */
+function isTransientNetworkError(err: unknown): boolean {
+  const messages: string[] = [];
+  let cause: unknown = err;
+  for (let depth = 0; cause instanceof Error && depth < 5; depth++) {
+    messages.push(cause.message);
+    const code = (cause as NodeJS.ErrnoException).code;
+    if (code && TRANSIENT_NET_CODES.has(code)) return true;
+    cause = cause.cause;
+  }
+  return /socket hang up|ECONNRESET|ETIMEDOUT|ECONNREFUSED/i.test(messages.join("\n"));
+}
+
 /**
  * OpenAI 兼容 chat completions 流式客户端。
  * 默认指向智谱 bigmodel 的 GLM；换厂商只改 .env 的 BASE_URL / API_KEY / MODEL。
@@ -31,7 +59,10 @@ export function createOpenAiCompatibleLlm(): LLMProvider {
         } catch (err) {
           lastError = err instanceof Error ? err : new Error(String(err));
           const empty = /没有返回正文内容/.test(lastError.message);
-          const transient = /fetch failed|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|network/i.test(lastError.message);
+          // 已输出部分正文的流中断不重试（会内容重复），其余瞬断走 cause 链判定
+          const transient =
+            isTransientNetworkError(lastError) &&
+            !(lastError as Error & { partialEmitted?: boolean }).partialEmitted;
           if (!empty && !transient) throw lastError;
           logWarn(empty ? "model response empty; retrying" : "model request transient failure; retrying", {
             provider: "llm",
@@ -107,8 +138,19 @@ async function streamOnce(
   let full = "";
 
   for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try {
+      chunk = await reader.read();
+    } catch (err) {
+      // 流中期中断：已经向调用方输出过部分正文时重试会导致内容重复，只能上抛；
+      // 尚无输出（只拿到响应头就断开）的由 generate 判定瞬断后重试
+      if (full.length > 0) {
+        throw Object.assign(err instanceof Error ? err : new Error(String(err)), { partialEmitted: true });
+      }
+      throw err;
+    }
+    if (chunk.done) break;
+    const value = chunk.value;
     // 客户端已断开：取消读取并释放上游连接（不继续攒正文）
     if (meta?.signal?.aborted) {
       await reader.cancel().catch(() => {});
