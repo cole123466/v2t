@@ -21,6 +21,11 @@ export default function StudioTasksPage() {
         ) : null}
       </div>
 
+      {/* 历史文案即契约（11 号票 S5）：诚实说明任务列表的找回边界，零机制 */}
+      <p className="mt-2 text-[11px] leading-relaxed text-paper-faint">
+        只显示此浏览器提交的任务；清除 Cookie 或换浏览器后无法找回。
+      </p>
+
       {error ? (
         <div className="mt-5 flex items-center gap-3 rounded-2xl border border-danger/30 bg-danger/10 px-5 py-3 text-sm text-danger/90">
           <X className="size-4 shrink-0" strokeWidth={1.5} />

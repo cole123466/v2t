@@ -7,6 +7,7 @@ import {
   Download,
   FileDown,
   FileText,
+  Link2,
   Loader,
   Printer,
   RotateCcw,
@@ -18,6 +19,7 @@ import type { TaskDetailLevel } from "@/server/tasks";
 import { DETAIL_OPTIONS } from "@/lib/article-options";
 import { ArticleBlockView, InlineText } from "./article-block";
 import { RequestIdLine } from "./request-id";
+import { ShareDialog } from "./share-dialog";
 import { petFlow } from "@/components/pet/pet-flow";
 
 function MindMapTree({
@@ -91,6 +93,7 @@ export function ArticlePanel({
   const [purpose, setPurpose] = useState(defaultPurpose ?? "");
   const [citationTimes, setCitationTimes] = useState<Map<string, number>>(new Map());
   const [exporting, setExporting] = useState<"md" | "zip" | "html" | "pdf" | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
   const abortRef = useRef<AbortController | null>(null);
 
@@ -403,6 +406,16 @@ export function ArticlePanel({
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
               <button
                 type="button"
+                onClick={() => setShareOpen(true)}
+                disabled={active.status !== "done"}
+                className="inline-flex items-center gap-1 font-mono text-[10px] text-paper-faint transition-colors hover:text-gold disabled:opacity-50"
+                title="创建只读分享链接"
+              >
+                <Link2 className="size-3" strokeWidth={1.5} />
+                分享
+              </button>
+              <button
+                type="button"
                 onClick={() => void exportPdf()}
                 disabled={exporting !== null}
                 className="inline-flex items-center gap-1 rounded-lg border border-gold/40 bg-gold/10 px-2 py-1 font-mono text-[10px] text-gold transition-colors hover:bg-gold/20 disabled:opacity-50"
@@ -553,6 +566,8 @@ export function ArticlePanel({
             {active.detailLevel === "concise" ? "速览" : active.detailLevel === "detailed" ? "深入" : "标准"}
             {" · "}
             {active.content.sections.length} 章
+            {/* 模型身份行（11 号票 S6）：历史文章 model 为默认值时不显示 */}
+            {active.model && active.model !== "glm-4.6" ? ` · ${active.model}` : ""}
             {active.purpose ? ` · 关注点：${active.purpose}` : ""}
           </p>
 
@@ -661,6 +676,14 @@ export function ArticlePanel({
             </p>
           ) : null}
         </div>
+      ) : null}
+
+      {shareOpen && active ? (
+        <ShareDialog
+          taskId={taskId}
+          articleId={active.id}
+          onClose={() => setShareOpen(false)}
+        />
       ) : null}
     </div>
   );
