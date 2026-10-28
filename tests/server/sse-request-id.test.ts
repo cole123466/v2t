@@ -105,17 +105,15 @@ describe("SSE 错误事件携带 request_id", () => {
     });
   });
 
-  it("图文文章失败", async () => {
+  it("图文文章：创建后台 job 返回 202，不再走同步 SSE（08 号票）", async () => {
+    const notify = vi.fn();
+    const articlesCreate = vi.fn(() => ({ id: "article-1" }));
+    const jobsCreate = vi.fn(() => ({ id: "job-1" }));
     mocks.getRuntime.mockReturnValue({
       store: { getOwned: () => ({ id: "task-1", status: "ready", mediaPurgedAt: null }) },
-      dataDir: "/tmp/v2t-test",
-      activities: activities(),
-      articles: { listForTask: () => [] },
-      articleService: {
-        generate: async () => {
-          throw new Error("模拟文章失败");
-        },
-      },
+      articles: { listForTask: () => [], create: articlesCreate },
+      jobs: { activeForTask: () => undefined, create: jobsCreate },
+      worker: { notify },
     });
 
     const response = await articlesPost(
@@ -127,7 +125,10 @@ describe("SSE 错误事件携带 request_id", () => {
       params(),
     );
 
-    const event = errorEvent(await response.text());
-    expect(event).toMatchObject({ message: "模拟文章失败", request_id: REQUEST_ID });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ jobId: "job-1", articleId: "article-1" });
+    expect(articlesCreate).toHaveBeenCalled();
+    expect(jobsCreate).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-1", kind: "article", articleId: "article-1" }));
+    expect(notify).toHaveBeenCalled();
   });
 });
