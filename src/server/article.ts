@@ -565,9 +565,67 @@ export function looseJsonBody(raw: string): string {
 
   // 截断处理：先看整体是否闭合，不闭合就补齐
   body = closeTruncated(body);
+  // 缺逗号修复必须先于 repairUnescapedQuotes：否则后者会把缺逗号处的
+  // 合法收尾引号误判为正文内引号转义掉，把两个独立字符串焊死
+  body = insertMissingCommas(body);
   body = repairUnescapedQuotes(body);
   body = body.replace(/,(\s*[}\]])/g, "$1");
   return body;
+}
+
+/**
+ * 补齐模型输出中漏掉的属性间逗号（glm 写长 JSON 的高发缺陷）。
+ * 判定条件（全部满足才插逗号，避免误伤）：
+ * 1. 当前在字符串外；
+ * 2. 该引号开启的是一个"key"字符串——它闭合后紧跟冒号；
+ * 3. 前一个非空白字符是某个值的收尾（" } ] 数字或 true/false/null 尾字母），
+ *    且不是逗号/冒号（冒号开头说明引号是值而非 key）。
+ * 线上案例：sections 长数组结束后直接跟 "mindMap"（trace 426e03a6，
+ * position 3702 报 Expected ',' or '}' after property value）。
+ */
+function insertMissingCommas(body: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch !== '"') {
+      out += ch;
+      continue;
+    }
+    // 字符串外的引号：判断它闭合后是否紧跟冒号（即是 key）
+    let j = i + 1;
+    let isKey = false;
+    while (j < body.length) {
+      if (body[j] === "\\") { j += 2; continue; }
+      if (body[j] === '"') {
+        let k = j + 1;
+        while (k < body.length && /\s/.test(body[k])) k++;
+        isKey = body[k] === ":";
+        break;
+      }
+      j++;
+    }
+    if (isKey) {
+      let p = out.length - 1;
+      while (p >= 0 && /\s/.test(out[p])) p--;
+      const prev = p >= 0 ? out[p] : "";
+      if (p >= 0 && prev !== "," && /["\}\]0-9a-z]/i.test(prev)) {
+        // 补一个逗号并保留原有缩进排版
+        out += ",";
+      }
+    }
+    out += ch;
+    inString = true;
+  }
+  return out;
 }
 
 /**
