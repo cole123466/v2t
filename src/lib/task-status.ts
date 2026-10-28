@@ -1,6 +1,9 @@
 import type { TaskStatus } from "@/server/tasks";
 
-/** 任务是否处于串行管线的某个处理阶段（不可删除、不可生成） */
+/**
+ * 任务是否处于串行管线的某个处理阶段（不可删除、不可生成）。
+ * 注意：canceled 是终态，不属于处理中——重启后 reap 不会碰它（12 号票 I5）。
+ */
 export function isProcessing(status: TaskStatus): boolean {
   return (
     status === "queued" ||
@@ -21,4 +24,5 @@ export const STATUS_LABEL: Record<TaskStatus, string> = {
   "extracting-frames": "抽取画面",
   ready: "就绪",
   failed: "失败",
+  canceled: "已取消",
 };
