@@ -71,8 +71,12 @@ export function RunProgress({
   recent?: number;
 }) {
   const [activities, setActivities] = useState<Activity[]>([]);
-  const [runDone, setRunDone] = useState(0);
-  const [runTotal, setRunTotal] = useState(0);
+  // 当次执行由 API 派生（currentRunForTask），锁定 runId：问答等并行 run 不会抢占文章路线
+  const [run, setRun] = useState<{ runId: string | null; done: number; total: number }>({
+    runId: null,
+    done: 0,
+    total: 0,
+  });
   const [expanded, setExpanded] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -85,15 +89,13 @@ export function RunProgress({
           (
             data: {
               activities?: Activity[];
-              currentRun?: { done: number; total: number } | null;
+              currentRun?: { runId: string; done: number; total: number } | null;
             } | null,
           ) => {
             if (!alive || !data?.activities) return;
             setActivities(data.activities);
-            if (data.currentRun) {
-              setRunDone(data.currentRun.done);
-              setRunTotal(data.currentRun.total);
-            }
+            const cr = data.currentRun;
+            if (cr) setRun({ runId: cr.runId, done: cr.done, total: cr.total });
             setLoaded(true);
           },
         )
@@ -111,22 +113,23 @@ export function RunProgress({
     };
   }, [taskId, live]);
 
-  // 当次执行 = 最新一个带 runId 的活动所属 run；老数据没有 runId 时退化为全部记录。
+  // 阅读路线锁定 API 派生的当次执行；无进行中 run 时（完成/中断后回看）退回最近一次。
   // 手动 useMemo 会被 React Compiler 拒绝优化，这里直接派生即可。
-  let currentRunId: string | null = null;
-  for (let i = activities.length - 1; i >= 0; i--) {
-    if (activities[i].runId) {
-      currentRunId = activities[i].runId;
-      break;
+  let currentRunId: string | null = run.runId;
+  if (!currentRunId) {
+    for (let i = activities.length - 1; i >= 0; i--) {
+      if (activities[i].runId) {
+        currentRunId = activities[i].runId;
+        break;
+      }
     }
   }
   const routeSteps = currentRunId
     ? activities.filter((a) => a.runId === currentRunId && a.kind !== "model")
     : activities.filter((a) => a.kind !== "model");
-  /** 现场记录：当次 run 的计划步骤之外的一切（模型调用、更早 run、老记录） */
-  const journal = currentRunId
-    ? activities.filter((a) => a.kind === "model" || a.runId !== currentRunId)
-    : activities;
+  /** 现场记录 = 全量活动时间线（vid-lens 语义：路线是结构化视图，记录是完整流水）。
+   * 后端不写 kind="model"，若按「当前 run 之外」过滤，首次生成时本区块会恒空。 */
+  const journal = activities;
 
   if (!loaded || activities.length === 0) return null;
 
@@ -139,7 +142,7 @@ export function RunProgress({
       {/* 阅读路线 */}
       <p className="flex items-center gap-2 font-mono text-[10px] tracking-widest text-paper-faint">
         阅读路线
-        {runTotal > 0 ? " · 已完成 " + runDone + "/" + runTotal + " 章" : ""}
+        {run.total > 0 ? " · 已完成 " + run.done + "/" + run.total + " 章" : ""}
         {live ? (
           <span className="flex items-center gap-1 text-gold/80" aria-hidden>
             <i className="size-1 animate-pulse rounded-full bg-gold" />

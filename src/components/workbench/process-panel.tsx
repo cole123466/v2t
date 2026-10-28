@@ -46,15 +46,24 @@ interface RunGroup {
   rows: ActivityRecord[];
 }
 
-/** 按执行分组：同一 runId 的相邻行归为一组，老记录（无 runId）各自成组保持时间序 */
+/**
+ * 按执行分组：同一 runId 的行全局归为一组（即使被问答等其他 run 的行隔开），
+ * 老记录（无 runId）各自成组保持时间序。key 用 "run:"+runId / 行 id，避免重复 key。
+ */
 function groupByRun(activities: ActivityRecord[]): RunGroup[] {
   const groups: RunGroup[] = [];
+  const byRun = new Map<string, RunGroup>();
   for (const a of activities) {
-    const last = groups[groups.length - 1];
-    if (a.runId && last?.runId === a.runId) {
-      last.rows.push(a);
+    if (a.runId) {
+      let group = byRun.get(a.runId);
+      if (!group) {
+        group = { key: "run:" + a.runId, runId: a.runId, rows: [] };
+        byRun.set(a.runId, group);
+        groups.push(group);
+      }
+      group.rows.push(a);
     } else {
-      groups.push({ key: a.runId ?? a.id, runId: a.runId, rows: [a] });
+      groups.push({ key: a.id, runId: null, rows: [a] });
     }
   }
   return groups;
