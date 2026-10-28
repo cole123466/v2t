@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import type { Transcript } from "@/server/asr";
 import { renderArticleHtml } from "@/server/article-html";
@@ -151,10 +152,24 @@ export async function GET(
     published_at: record.createdAt,
   };
 
-  const zip = createZip([
+  // manifest.json（11 号票 S6）：文件清单 + sha256 + bytes；不含时间戳以保持产物可复现
+  const manifestEntries = [
     { name: "article.md", data: Buffer.from(md, "utf8") },
     ...assets,
     { name: "sources.json", data: Buffer.from(JSON.stringify(sources, null, 2), "utf8") },
+  ];
+  const exportManifest = {
+    format_version: 1,
+    files: manifestEntries.map((entry) => ({
+      path: entry.name,
+      bytes: entry.data.length,
+      sha256: createHash("sha256").update(entry.data).digest("hex"),
+    })),
+  };
+
+  const zip = createZip([
+    ...manifestEntries,
+    { name: "manifest.json", data: Buffer.from(JSON.stringify(exportManifest, null, 2), "utf8") },
   ]);
   return new Response(new Uint8Array(zip), {
     headers: {

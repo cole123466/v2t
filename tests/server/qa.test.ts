@@ -15,7 +15,6 @@ import {
   validateQaContext,
   type QaContext,
 } from "@/server/qa";
-import type { Article } from "@/server/article";
 
 let dir: string;
 let db: Db;
@@ -199,80 +198,198 @@ describe("问答（Seam D · 引用校验）", () => {
   });
 });
 
-describe("锚点校验（09 号票 P1/P2）", () => {
-  const ARTICLE: Article = {
-    title: "神经 网络 讲义",
-    sections: [
-      {
-        id: "sec-1",
-        title: "基础结构",
-        blocks: [
-          { type: "paragraph", text: "神经网络由多层节点组成，每层负责不同粒度的特征。" },
-          { type: "figure", frameId: "f01", caption: "网络结构示意" },
-        ],
-      },
-    ],
-    mindMap: [],
-    limitations: [],
-  };
-  const source = {
-    article: ARTICLE,
-    transcript: TRANSCRIPT,
-    frameIds: new Set(["f01", "f02"]),
-  };
+describe("轮模型（09 号票 P3）", () => {
+  it("同一轮 user 与 assistant 共享 turn_id，assistant 行落 completed 终态", async () => {
+    const store = new QaStore(db);
+    const svc = new QaService({ store, llm: fakeLlm('{"answer":"权重重要 [[t03]]。","limitations":[]}') });
+    const { message, turnId } = await svc.ask({
+      taskId: "turn-task-1",
+      transcript: TRANSCRIPT,
+      question: "权重是什么？",
+    });
 
-  it("合法锚点通过：文章选段（包含核对）、文稿选段、帧", () => {
-    const section: QaContext = {
-      kind: "section",
-      sectionId: "sec-1",
-      blockIndex: 0,
-      quote: "多层节点组成",
-    };
-    expect(() => validateQaContext(section, source)).not.toThrow();
-    const transcript: QaContext = { kind: "transcript", segmentIndex: 2, quote: "权重决定了" };
-    expect(() => validateQaContext(transcript, source)).not.toThrow();
-    const frame: QaContext = { kind: "frame", frameId: "f01" };
-    expect(() => validateQaContext(frame, source)).not.toThrow();
+    expect(turnId).toBeTruthy();
+    expect(message.turnId).toBe(turnId);
+    expect(message.status).toBe("completed");
+    const history = store.listForTask("turn-task-1");
+    expect(history.map((m) => m.turnId)).toEqual([turnId, turnId]);
+    expect(history[0].status).toBeNull(); // user 行无状态
+    expect(history[1].content).toContain("权重");
   });
 
-  it("伪造锚点拒绝：quote 与块内容不符时抛 QaContextError 且 field=context.quote", () => {
-    const bad: QaContext = {
-      kind: "section",
-      sectionId: "sec-1",
-      blockIndex: 0,
-      quote: "这段文字不在文章里",
-    };
+  it("上游中止：assistant 行由服务端落 canceled", async () => {
+    const store = new QaStore(db);
+    const controller = new AbortController();
+    const svc = new QaService({
+      store,
+      llm: {
+        async generate(_messages, _onChunk, meta) {
+          meta?.signal?.addEventListener("abort", () => controller.abort(), { once: true });
+          controller.abort();
+          // 模拟 llm 层感知 signal 后抛错（对齐 llm.ts 的「请求已取消」文案）
+          throw new Error("请求已取消");
+        },
+      },
+    });
+    await expect(
+      svc.ask({
+        taskId: "turn-task-2",
+        transcript: TRANSCRIPT,
+        question: "讲讲开场",
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow(/已取消/);
+
+    const [user, assistant] = store.listForTask("turn-task-2");
+    expect(assistant.status).toBe("canceled");
+    expect(assistant.error).toBeNull();
+    expect(user.turnId).toBe(assistant.turnId);
+  });
+
+  it("上游失败：assistant 行落 failed，对外文案固定不透出内部细节", async () => {
+    const store = new QaStore(db);
+    const svc = new QaService({
+      store,
+      llm: {
+        async generate() {
+          throw new Error("LLM 服务返回 500");
+        },
+      },
+    });
+    await expect(
+      svc.ask({ taskId: "turn-task-3", transcript: TRANSCRIPT, question: "问" }),
+    ).rejects.toThrow(/500/);
+
+    const [, assistant] = store.listForTask("turn-task-3");
+    expect(assistant.status).toBe("failed");
+    // 原始错误只进日志；落库 error 是统一文案，避免内部细节透出客户端
+    expect(assistant.error).toBe("回答失败，请稍后重试或重新提问");
+    expect(assistant.error).not.toContain("500");
+  });
+
+  it("lastTurn/getTurn 定位最后一轮；重答以新 turn 追加，旧轮保留", async () => {
+    const store = new QaStore(db);
+    const svc = new QaService({ store, llm: fakeLlm('{"answer":"答 [[t01]]","limitations":[]}') });
+    const first = await svc.ask({ taskId: "turn-task-4", transcript: TRANSCRIPT, question: "第一问" });
+    const second = await svc.ask({
+      taskId: "turn-task-4",
+      transcript: TRANSCRIPT,
+      question: "第二问",
+      turnId: first.turnId,
+    });
+    expect(second.turnId).toBe(first.turnId);
+
+    // 手动把最后一轮改成 canceled 模拟中断（updateStatus 仅 streaming 行可写；
+    // 该 assistant 行已被 finishStreaming 落成 completed，这里用原始 SQL 模拟
+    // 服务重启遗留/历史上仍允许写的路径，落一个 canceled 的最后一轮）
+    const lastAssistant = store.lastTurn("turn-task-4").find((m) => m.role === "assistant")!;
+    db.prepare("UPDATE qa_messages SET status = 'canceled' WHERE id = ?").run(lastAssistant.id);
+    expect(store.lastTurn("turn-task-4")[1].status).toBe("canceled");
+
+    // 终态行不可再被状态回写覆盖：防止停止落 canceled 后被 completed 覆盖
+    store.updateStatus(lastAssistant.id, { status: "completed" });
+    expect(store.lastTurn("turn-task-4")[1].status).toBe("canceled");
+    const overwritten = store.finishStreaming(lastAssistant.id, {
+      content: "不该写入",
+      citations: [],
+      limitations: [],
+    });
+    expect(overwritten).toBeNull();
+    expect(store.lastTurn("turn-task-4")[1].status).toBe("canceled");
+
+    expect(store.lastTurn("turn-task-4").map((m) => m.role)).toEqual(["user", "assistant"]);
+    // 两问共用同一个 turnId，getTurn 返回全部 4 行
+    expect(store.getTurn("turn-task-4", first.turnId).length).toBe(4);
+
+    // 重答产生新 turn，旧轮原样保留
+    const retried = await svc.ask({ taskId: "turn-task-4", transcript: TRANSCRIPT, question: "第二问" });
+    expect(retried.turnId).not.toBe(first.turnId);
+    const all = store.listForTask("turn-task-4");
+    expect(all.filter((m) => m.role === "user")).toHaveLength(3);
+    // 重答的轮排在最后；被取消的是第二次问答那一行（下标 3），重答行已 completed
+    expect(all[3].status).toBe("canceled");
+    expect(all[5].status).toBe("completed");
+    const oldTurn = store.getTurn("turn-task-4", first.turnId);
+    expect(oldTurn).toHaveLength(4); // 两问共用一个 turnId：2 问 + 2 答
+    expect(oldTurn[3].status).toBe("canceled"); // 被取消的是第二次问答那一行
+    expect(store.lastTurn("turn-task-4")[1].status).toBe("completed");
+  });
+
+  it("老数据（无 turn_id）按相邻对合成轮，getTurn 兼容 assistant 行 id", async () => {
+    const store = new QaStore(db);
+    store.add({ taskId: "turn-task-5", role: "user", content: "老问题" });
+    store.add({ taskId: "turn-task-5", role: "assistant", content: "老回答" });
+    const all = store.listForTask("turn-task-5");
+    expect(all.every((m) => m.turnId === null)).toBe(true);
+
+    const assistant = all[1];
+    const turn = store.getTurn("turn-task-5", assistant.id);
+    expect(turn.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(turn[0].content).toBe("老问题");
+  });
+});
+
+describe("锚点校验（09 号票 P1/P2 服务端白名单）", () => {
+  const lookups = {
+    section: (id: string) =>
+      id === "s1" ? { blocks: [{ text: "神经网络的基础结构是分层处理" }] } : null,
+    frame: (id: string) => (id === "f01" ? { id: "f01", tSec: 3 } : null),
+    segment: (index: number) => TRANSCRIPT.segments[index] ?? null,
+  };
+
+  it("section 锚点：quote 是块文本前缀或包含时通过", () => {
+    expect(() =>
+      validateQaContext(
+        { kind: "section", sectionId: "s1", blockIndex: 0, quote: "神经网络的基础结构" },
+        lookups,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateQaContext({ kind: "section", sectionId: "s1", blockIndex: 0, quote: "分层处理" }, lookups),
+    ).not.toThrow();
+  });
+
+  it("伪造锚点（quote 与块内容不符）拒绝，field 指向 context.quote", () => {
     try {
-      validateQaContext(bad, source);
-      expect.unreachable();
+      validateQaContext(
+        { kind: "section", sectionId: "s1", blockIndex: 0, quote: "凭空捏造的内容" },
+        lookups,
+      );
+      expect.unreachable("应抛出 QaContextError");
     } catch (err) {
       expect(err).toBeInstanceOf(QaContextError);
       expect((err as QaContextError).field).toBe("context.quote");
     }
   });
 
-  it("越界引用拒绝：章节 / 块 / 段 / 帧不存在", () => {
-    expect(() =>
-      validateQaContext({ kind: "section", sectionId: "nope", blockIndex: 0, quote: "x" }, source),
-    ).toThrow(QaContextError);
-    expect(() =>
-      validateQaContext({ kind: "section", sectionId: "sec-1", blockIndex: 9, quote: "x" }, source),
-    ).toThrow(QaContextError);
-    expect(() =>
-      validateQaContext({ kind: "transcript", segmentIndex: 99, quote: "x" }, source),
-    ).toThrow(QaContextError);
-    expect(() => validateQaContext({ kind: "frame", frameId: "f99" }, source)).toThrow(
-      QaContextError,
-    );
-  });
-
-  it("超长 quote 拒绝（上限 200 字）", () => {
+  it("quote 超 200 字拒绝；块不存在拒绝", () => {
     expect(() =>
       validateQaContext(
-        { kind: "transcript", segmentIndex: 0, quote: "很".repeat(201) },
-        source,
+        { kind: "section", sectionId: "s1", blockIndex: 0, quote: "长".repeat(201) },
+        lookups,
       ),
-    ).toThrow(QaContextError);
+    ).toThrow(/200/);
+    expect(() =>
+      validateQaContext({ kind: "section", sectionId: "missing", blockIndex: 0, quote: "x" }, lookups),
+    ).toThrow(/不存在/);
+    expect(() =>
+      validateQaContext({ kind: "section", sectionId: "s1", blockIndex: 9, quote: "x" }, lookups),
+    ).toThrow(/不存在/);
+  });
+
+  it("transcript 锚点：quote 与段文本核对，伪造内容/段越界拒绝", () => {
+    expect(() =>
+      validateQaContext({ kind: "transcript", segmentIndex: 0, quote: "今天我们讲" }, lookups),
+    ).not.toThrow();
+    // quote 不在目标段文本中：伪造选段拒绝
+    expect(() =>
+      validateQaContext({ kind: "transcript", segmentIndex: 0, quote: "凭空捏造的内容" }, lookups),
+    ).toThrow(/与文稿不符/);
+    expect(() =>
+      validateQaContext({ kind: "transcript", segmentIndex: 99, quote: "x" }, lookups),
+    ).toThrow();
+    expect(() => validateQaContext({ kind: "frame", frameId: "f01" }, lookups)).not.toThrow();
+    expect(() => validateQaContext({ kind: "frame", frameId: "f99" }, lookups)).toThrow(/不存在/);
   });
 });
 
@@ -325,8 +442,14 @@ describe("选帧追问（09 号票 P2 · grounded 铁律）", () => {
       }),
     ).rejects.toThrow(/未能引用选中画面/);
     expect(calls).toBe(2);
+    // 轮模型（09 号票 P3）：失败也落 assistant 行，状态 failed、error 为统一文案，
+    // 原始原因（未引用帧）只进日志——不会透出到客户端
     const history = store.listForTask("qa-frame-2");
-    expect(history.map((m) => m.role)).toEqual(["user"]);
+    expect(history.map((m) => m.role)).toEqual(["user", "assistant"]);
+    const assistant = history[1];
+    expect(assistant.status).toBe("failed");
+    expect(assistant.error).toBe("回答失败，请稍后重试或重新提问");
+    expect(assistant.error).not.toContain("未能引用选中画面");
   });
 
   it("重问后引用了帧：按第二次回答交付", async () => {
