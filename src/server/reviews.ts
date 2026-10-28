@@ -351,7 +351,9 @@ export async function runReviewJob(
     });
     emit("done", { reviewId: review.id, articleId });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // fs 类错误的 message 含 data/ 绝对路径，不下发客户端；完整错误只进日志
+    const code = typeof (err as { code?: unknown }).code === "string" ? (err as { code: string }).code : null;
+    const message = code ? `任务文件读取失败（${code}）` : err instanceof Error ? err.message : String(err);
     const aborted = signal.aborted;
     // 文章永远不因审核失败而变化；重启打断折为 failed，不自动重跑（R1 手动语义）
     deps.reviews.update(review.id, {

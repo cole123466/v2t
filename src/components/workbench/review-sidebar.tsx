@@ -58,11 +58,16 @@ export function ReviewSidebar({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [starting, setStarting] = useState(false);
   const loadedRef = useRef<string | null>(null);
+  // 竞态防护：切文章后旧文章的在途响应作废
+  const articleIdRef = useRef(articleId);
+  articleIdRef.current = articleId;
 
   const load = async () => {
+    const current = articleIdRef.current;
     const res = await fetch(`/api/tasks/${taskId}/articles/${articleId}/reviews`);
     if (!res.ok) return;
     const data = (await res.json()) as { reviews?: ArticleReviewView[] };
+    if (articleIdRef.current !== current) return;
     if (data.reviews) setReviews(data.reviews);
   };
 
@@ -70,7 +75,8 @@ export function ReviewSidebar({
   useEffect(() => {
     if (loadedRef.current === articleId) return;
     loadedRef.current = articleId;
-    void load();
+    setReviews([]);
+    void load().catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [articleId]);
 
@@ -102,6 +108,8 @@ export function ReviewSidebar({
         return;
       }
       await load();
+    } catch {
+      setError("网络异常，发起审核失败");
     } finally {
       setStarting(false);
     }

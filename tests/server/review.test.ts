@@ -102,6 +102,7 @@ describe("10 号票：手动审稿", () => {
       },
     };
     const h = makeHarness(badLlm);
+    const articleBefore = structuredClone(ARTICLE);
     const job = h.jobs.create({ taskId: "t-rv-2", kind: "review", articleId: "a-rv-2" });
     const review = h.reviews.create({ taskId: "t-rv-2", articleId: "a-rv-2", jobId: job.id, model: null });
     const events: string[] = [];
@@ -114,7 +115,8 @@ describe("10 号票：手动审稿", () => {
     const after = h.reviews.get(review.id)!;
     expect(after.status).toBe("failed");
     expect(after.error).toBeTruthy();
-    // 铁律：文章内容不被改动——articleContent 提供的对象引用未被触碰，这里验证 emit error
+    // 铁律：文章内容不被改动——前后序列化逐字节一致
+    expect(JSON.stringify(ARTICLE)).toBe(JSON.stringify(articleBefore));
     expect(events).toContain("error");
   });
 
@@ -133,6 +135,20 @@ describe("10 号票：手动审稿", () => {
     const afterA = h.reviews.get(rowA.id)!;
     expect(afterA.status).toBe("failed");
     expect(afterA.error).toContain("审核中断");
+
+    // queued 状态的 review 行同样折为 failed：重启后不得永久卡在「排队中」
+    const jobB = h.jobs.create({ taskId: "t-rv-3", kind: "review", articleId: "a-rv-5" });
+    h.reviews.create({ taskId: "t-rv-3", articleId: "a-rv-5", jobId: jobB.id, model: null });
+    h.jobs.update(jobB.id, { status: "running" });
+    const rowB = h.reviews.listForArticle("a-rv-5")[0];
+    expect(rowB.status).toBe("queued");
+
+    const reapedB = h.jobs.reap();
+    expect(reapedB).toBe(1);
+    expect(h.jobs.get(jobB.id)?.status).toBe("interrupted");
+    const afterB = h.reviews.get(rowB.id)!;
+    expect(afterB.status).toBe("failed");
+    expect(afterB.error).toContain("审核中断");
   });
 
   it("R2：历史全留——每次审核一行，新→旧排序", async () => {

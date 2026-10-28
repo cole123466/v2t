@@ -47,6 +47,7 @@ export async function POST(
   }
 
   const traceId = requestId(req);
+  let committed: { reviewId: string; jobId: string } | null = null;
   try {
     // job + review 同一事务：失败可回溯执行现场，也避免出现无主 review 行
     rt.db.exec("BEGIN");
@@ -54,14 +55,26 @@ export async function POST(
       const job = rt.jobs.create({ taskId: id, kind: "review", articleId });
       const review = rt.reviews.create({ taskId: id, articleId, jobId: job.id, model: null });
       rt.db.exec("COMMIT");
-      rt.worker.notify();
-      return Response.json({ reviewId: review.id, jobId: job.id }, { status: 202 });
+      // COMMIT 之后不再回滚；notify 失败只记日志，worker 轮询兜底
+      committed = { reviewId: review.id, jobId: job.id };
     } catch (txErr) {
       rt.db.exec("ROLLBACK");
       throw txErr;
     }
-  } catch (err) {
+    try {
+      rt.worker.notify();
+    } catch (notifyErr) {
+      logError("review worker notify failed", {
+        task_id: id,
+        article_id: articleId,
+        trace_id: traceId,
+        error: notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
+      });
+    }
+    return Response.json(committed, { status: 202 });
+  } catch {
     logError("review create failed", { task_id: id, article_id: articleId, trace_id: traceId });
-    return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+    // 不透传内部 err.message（可能含 SQL 片段/路径）
+    return Response.json({ error: "发起审核失败，请稍后重试" }, { status: 500 });
   }
 }
