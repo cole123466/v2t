@@ -14,6 +14,11 @@ export interface QaCitation {
   start: number;
   end: number;
   quote: string;
+  /**
+   * 15 号票：仅语义核对产生的结论（问答链路本期不做核对，恒为 null）；
+   * 老数据无此字段，读取时视为 null，不因新增字段报错。
+   */
+  verified?: "supported" | "unsupported" | "partial" | null;
 }
 
 /** 引用编号（tNN）→ 段落下标 */

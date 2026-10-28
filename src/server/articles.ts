@@ -18,6 +18,15 @@ import {
   type ArticleSection,
   type CitationCatalog,
 } from "./article";
+import {
+  annotateUnsupported,
+  collectVerifyPairs,
+  parseVerifyResults,
+  unverifiedLimitation,
+  verifyPrompt,
+  type VerifyPair,
+  type VerifyResult,
+} from "@/lib/semantic";
 
 export type ArticleDetailLevel = "concise" | "standard" | "detailed";
 
@@ -294,6 +303,7 @@ export interface RunForJobInput {
     onOutline?: (outline: ArticleDraftOutline) => void;
     onSectionDone?: (done: number, total: number) => void;
     onPhase?: (phase: string) => void;
+    onSectionVerified?: (index: number, message: string) => void;
   };
 }
 
@@ -487,6 +497,8 @@ export class ArticleService {
       // 第二步：逐章生成（每章一次调用，带该章相关画面）；resume 跳过已存章节
       const existing = new Map((input.resume?.existingSections ?? []).map((s) => [s.id, s]));
       const sections = [] as Article["sections"];
+      // 语义核对产生的未支持条目（C6）：随最终 limitations 一起落库
+      const verifyLimitations: Article["limitations"] = [];
       let doneCount = 0;
       for (let i = 0; i < outline.sections.length; i++) {
         if (input.signal?.aborted) throw new Error("生成已中止");
@@ -651,13 +663,130 @@ export class ArticleService {
           images: images.length,
           duration_ms: elapsedMs(sectionAt),
         });
+
+        // ---- 15 号票后半（C4/C6/C7）：语义核对 ----
+        // 定位：质量增强，不是发布门禁。核对环节任何失败（LLM 报错、输出不合规）
+        // 都只记 failed 步骤，绝不让章节或文章失败——不能因核对丢内容。
+        const verifyAt = Date.now();
+        const verifyStep =
+          steps?.start({
+            taskId: input.taskId,
+            kind: "verify",
+            runId,
+            phase: "write",
+            title: `核对第 ${i + 1} 章引用`,
+            articleId: record.id,
+          }) ?? null;
+        let verifyNote = "本章没有需要核对的引用";
+        try {
+          const outcome = await this.verifySection({
+            blocks: parsedBlocks,
+            catalog: input.catalog,
+            signal: input.signal,
+            onModel,
+            // 重写该章一次（C6）：让模型改写论断或换更贴切的引用
+            onUnsupported: async (failed) => {
+              const rewriteNote =
+                `第 ${failed.map((r) => r.index + 1).join("、")} 处引用未能支持论断，` +
+                "请改写论断或换用更贴切的引用编号；只输出 JSON（与之前相同的章节结构）。";
+              const raw = await this.opts.llm.generate(
+                [
+                  { role: "system", content: prompt.system },
+                  { role: "user", content: prompt.user },
+                  { role: "user", content: rewriteNote },
+                ],
+                () => {},
+                {
+                  operation: "article.verify-rewrite",
+                  taskId: input.taskId,
+                  traceId: input.traceId,
+                  signal: input.signal,
+                  onModel,
+                },
+              );
+              const rewritten = JSON.parse(looseJsonBody(raw)) as { blocks?: unknown[] };
+              const normalized = normalizeArticle({
+                title: outline.title,
+                sections: [
+                  {
+                    id: section.id,
+                    title: parsed!.title?.trim() || section.title,
+                    blocks: rewritten.blocks ?? [],
+                  },
+                ],
+                mindMap: [],
+                limitations: [],
+              });
+              // 重写没有产出可用正文（缺 blocks 字段 / 空数组）时按核对失败处理，
+              // 调用方 catch 后保留原章节——绝不让重写把整章清空
+              if (normalized.sections[0].blocks.length === 0) {
+                throw new Error("重写结果没有正文内容");
+              }
+              return normalized.sections[0].blocks;
+            },
+          });
+          if (outcome.unsupported.length > 0) {
+            // 重写仍不过 → 保留正文，内联标注 + limitations（C6 底线：绝不丢内容）
+            const marked = annotateUnsupported(
+              outcome.blocks,
+              outcome.unsupported.map((u) => u.token),
+            );
+            sections[sections.length - 1] = {
+              id: section.id,
+              title: parsed.title?.trim() || section.title,
+              blocks: marked.blocks,
+            };
+            verifyLimitations.push(
+              ...outcome.unsupported.map((u): Article["limitations"][number] => ({
+                text: unverifiedLimitation(i + 1, u.claim),
+              })),
+            );
+            verifyNote = `已保留正文并标注：${outcome.note}`;
+          } else if (outcome.blocks !== parsedBlocks) {
+            // 重写通过 → 用重写后的正文替换原章节
+            sections[sections.length - 1] = {
+              id: section.id,
+              title: parsed.title?.trim() || section.title,
+              blocks: outcome.blocks,
+            };
+            verifyNote = outcome.note;
+          } else {
+            verifyNote = outcome.note;
+          }
+          steps?.finish(verifyStep!.id, { ok: true, status: "completed", message: verifyNote });
+        } catch (err) {
+          // 核对本身失败不中止整篇（质量增强非门禁），步骤记 failed
+          steps?.finish(verifyStep!.id, {
+            ok: false,
+            status: "failed",
+            message: err instanceof Error ? err.message.slice(0, 200) : "核对失败",
+          });
+          logWarn("article section verify failed; continuing", {
+            task_id: input.taskId,
+            trace_id: input.traceId,
+            article_id: record.id,
+            section: section.id,
+            ...errorFields(err),
+            duration_ms: elapsedMs(verifyAt),
+          });
+          verifyNote = "核对未完成（不影响文章）";
+        }
+        input.hooks?.onSectionVerified?.(i + 1, verifyNote);
+        logInfo("article section verified", {
+          task_id: input.taskId,
+          trace_id: input.traceId,
+          article_id: record.id,
+          section: section.id,
+          message: verifyNote,
+          duration_ms: elapsedMs(verifyAt),
+        });
       }
 
       const article = normalizeArticle({
         title: outline.title,
         sections,
         mindMap: outline.mindMap,
-        limitations: [],
+        limitations: verifyLimitations,
       });
       input.hooks?.onPhase?.("validate");
       const validateStep = steps?.start({
@@ -756,6 +885,95 @@ export class ArticleService {
   private runningStepIds(runId: string | null): string[] {
     if (!runId || !this.opts.activities) return [];
     return this.opts.activities.runningIdsForRun(runId);
+  }
+
+  /**
+   * 15 号票 C4：语义核对一章。整章所有「句子 ↔ 引用」成对列出，一次调用批量判定。
+   * unsupported → 重写该章一次（C6）；重写仍不过 → 保留正文，返回未支持编号由调用方标注。
+   * partial 视为通过，数量汇入步骤 message（限制说明候选池）。
+   */
+  private async verifySection(input: {
+    blocks: ArticleSection["blocks"];
+    catalog: CitationCatalog;
+    signal?: AbortSignal;
+    onModel: (model: string) => void;
+    onUnsupported: (failed: VerifyResult[]) => Promise<ArticleSection["blocks"]>;
+  }): Promise<{
+    note: string;
+    /** 未支持的「编号 ↔ 论断」对（基于重写后正文重新抽取，标注与 limitation 用） */
+    unsupported: VerifyPair[];
+    blocks: ArticleSection["blocks"];
+  }> {
+    const pairs = collectVerifyPairs({ blocks: input.blocks }, input.catalog);
+    if (pairs.length === 0) {
+      return { note: "本章没有需要核对的引用", unsupported: [], blocks: input.blocks };
+    }
+    const judge = async (currentBlocks: ArticleSection["blocks"]): Promise<VerifyResult[]> => {
+      const currentPairs = collectVerifyPairs({ blocks: currentBlocks }, input.catalog);
+      const raw = await this.opts.llm.generate(
+        [
+          {
+            role: "system",
+            content:
+              "你是严谨的事实核对员。只依据给定的原文判断论断是否被直接支持，不引入外部知识。输出严格 JSON。",
+          },
+          { role: "user", content: verifyPrompt(currentPairs) },
+        ],
+        () => {},
+        {
+          operation: "article.verify",
+          signal: input.signal,
+          onModel: input.onModel,
+        },
+      );
+      return parseVerifyResults(raw, currentPairs.length);
+    };
+
+    let results = await judge(input.blocks);
+    const failed = results.filter((r) => r.verdict === "unsupported");
+    if (failed.length === 0) {
+      const partial = results.filter((r) => r.verdict === "partial");
+      return {
+        note:
+          `${pairs.length} 处引用全部支持` +
+          (partial.length > 0 ? `（${partial.length} 处为部分支持）` : ""),
+        unsupported: [],
+        blocks: input.blocks,
+      };
+    }
+
+    // C6：重写该章一次
+    const rewrittenBlocks = await input.onUnsupported(failed);
+    // 未支持条目按重写后正文重新抽取：重写可能增删/替换引用编号，
+    // 不能拿原始 pairs 的索引去映射，否则会标注错位
+    const rewrittenPairs = collectVerifyPairs({ blocks: rewrittenBlocks }, input.catalog);
+    // 重写把引用删光 = 留下无出处的断言，比标注更糟（票15底线）。
+    // judge 对空配对恒判全绿（parseVerifyResults 按 count=0 返回空），
+    // 会把无引用版本当重写通过整章替换——此处拒绝重写，退回原文按首轮 failed 标注
+    if (rewrittenPairs.length === 0) {
+      return {
+        note: `${failed.length} 处未支持，重写删光了引用，已按原文标注`,
+        unsupported: pairs.filter((_, idx) => failed.some((r) => r.index === idx)),
+        blocks: input.blocks,
+      };
+    }
+    const retryResults = await judge(rewrittenBlocks);
+    const stillFailed = retryResults.filter((r) => r.verdict === "unsupported");
+    if (stillFailed.length === 0) {
+      const partial = retryResults.filter((r) => r.verdict === "partial");
+      return {
+        note: `${failed.length} 处未支持，已重写${partial.length > 0 ? `（${partial.length} 处为部分支持）` : ""}`,
+        unsupported: [],
+        blocks: rewrittenBlocks,
+      };
+    }
+    return {
+      note: `${stillFailed.length} 处未支持，已标注`,
+      unsupported: rewrittenPairs.filter((_, idx) =>
+        stillFailed.some((r) => r.index === idx),
+      ),
+      blocks: rewrittenBlocks,
+    };
   }
 
   /** 校验失败的成品也保留记录并抛出可读错误（由调用方决定是否重试） */
