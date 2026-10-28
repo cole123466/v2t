@@ -108,6 +108,14 @@ const TABLES = [
      created_at TEXT NOT NULL,
      updated_at TEXT NOT NULL
    );`,
+  // 11 号票（decision-share-history）：单篇只读分享。删行即撤销；重新分享插入新 id
+  `CREATE TABLE IF NOT EXISTS shares (
+     id TEXT PRIMARY KEY,
+     token TEXT NOT NULL UNIQUE,
+     task_id TEXT NOT NULL,
+     article_id TEXT NOT NULL,
+     created_at TEXT NOT NULL
+  );`,
 ];
 
 /** 追加列（幂等：重复执行时忽略 duplicate column 错误） */
@@ -121,6 +129,9 @@ const COLUMNS: Array<{ table: string; column: string; ddl: string }> = [
   { table: "tasks", column: "source_notice", ddl: "TEXT" },
   // 设备归属：空串是加隔离之前的历史任务
   { table: "tasks", column: "owner", ddl: "TEXT NOT NULL DEFAULT ''" },
+  // 12 号票 I1（decision-input-ops）：导入页选定的文章默认值随任务落库
+  { table: "tasks", column: "detail_level", ddl: "TEXT" },
+  { table: "tasks", column: "purpose", ddl: "TEXT" },
   // 07 号票（decision-progress-model）：步骤模型——run / seq / phase / title / status 等
   { table: "activities", column: "run_id", ddl: "TEXT" },
   { table: "activities", column: "seq", ddl: "INTEGER NOT NULL DEFAULT 0" },
@@ -131,6 +142,14 @@ const COLUMNS: Array<{ table: string; column: string; ddl: string }> = [
   { table: "activities", column: "attempt_no", ddl: "INTEGER NOT NULL DEFAULT 1" },
   { table: "activities", column: "article_id", ddl: "TEXT" },
   { table: "activities", column: "usage_json", ddl: "TEXT" },
+  // 09 号票（decision-qa-evidence）P3 轮模型：turn_id/status 仅 assistant 行有终态，
+  // context 是锚点 JSON（section/transcript/frame 三种 kind），error 记失败原因，
+  // request_id 是该次请求的追踪编号（失败卡展示，排障对照服务端日志）
+  { table: "qa_messages", column: "turn_id", ddl: "TEXT" },
+  { table: "qa_messages", column: "status", ddl: "TEXT" },
+  { table: "qa_messages", column: "context", ddl: "TEXT" },
+  { table: "qa_messages", column: "error", ddl: "TEXT" },
+  { table: "qa_messages", column: "request_id", ddl: "TEXT" },
 ];
 
 /** 追加索引（幂等） */
@@ -139,6 +158,7 @@ const INDEXES = [
   "CREATE INDEX IF NOT EXISTS activities_task_run ON activities(task_id, run_id)",
   "CREATE INDEX IF NOT EXISTS jobs_pick ON jobs(status, created_at)",
   "CREATE INDEX IF NOT EXISTS reviews_article ON article_reviews(article_id, created_at)",
+  "CREATE INDEX IF NOT EXISTS shares_task ON shares(task_id)",
 ];
 
 export function openDb(file: string): Db {

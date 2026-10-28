@@ -13,6 +13,7 @@ import { runReviewJob, ReviewStore } from "./reviews";
 import { createOpenAiCompatibleLlm } from "./llm";
 import { failOrphanTasks, purgeExpiredMedia, type MaintenanceDeps } from "./maintenance";
 import { QaService, QaStore } from "./qa";
+import { ShareStore } from "./shares";
 import { TaskRunner } from "./runner";
 import { createYtDlpProvider, type SourceProvider } from "./source";
 import { TaskStore } from "./tasks";
@@ -32,6 +33,7 @@ export interface Runtime extends MaintenanceDeps {
   qa: QaStore;
   qaService: QaService;
   reviews: ReviewStore;
+  shares: ShareStore;
   dataDir: string;
   source: SourceProvider;
 }
@@ -135,6 +137,7 @@ export function getRuntime(): Runtime {
     });
     const qa = new QaStore(db);
     const qaService = new QaService({ store: qa, llm });
+    const shares = new ShareStore(db);
     const runtime: Runtime = {
       db,
       store,
@@ -149,6 +152,7 @@ export function getRuntime(): Runtime {
       qa,
       qaService,
       reviews,
+      shares,
       dataDir,
       source,
     };

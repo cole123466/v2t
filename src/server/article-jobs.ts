@@ -90,6 +90,9 @@ export async function runArticleJob(
           deps.jobs.update(job.id, { phase });
           emit("step", { phase });
         },
+        onSectionVerified: (index, message) => {
+          emit("step", { kind: "verify", index, message });
+        },
       },
     });
     deps.jobs.update(job.id, {

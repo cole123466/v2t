@@ -41,7 +41,7 @@ export async function GET(
           close();
           return;
         }
-        if (t.status === "ready" || t.status === "failed") close();
+        if (t.status === "ready" || t.status === "failed" || t.status === "canceled") close();
       };
 
       send(task);
