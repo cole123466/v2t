@@ -128,7 +128,12 @@ export function ArticlePanel({
       });
   }, [taskId]);
 
-  const active = articles.find((a) => a.id === selected) ?? articles.find((a) => a.status === "done");
+  // 生成中的文章也作为展示对象：部分 content 落库后刷新页面能直接看到已生成章节
+  const active =
+    articles.find((a) => a.id === selected) ??
+    articles.find((a) => a.status === "done") ??
+    articles.find((a) => a.status === "streaming") ??
+    articles.find((a) => a.status === "interrupted");
 
   const seek = (t: number) => {
     const video = videoRef.current;
@@ -425,6 +430,12 @@ export function ArticlePanel({
         <div className="glass min-h-0 flex-1 overflow-auto rounded-2xl p-6">
           {/* 正文限宽：过宽的行长会让阅读跳行，正文区在宽屏下居中 */}
           <div className="mx-auto w-full max-w-[44rem]">
+          {active.status === "streaming" ? (
+            <p className="mb-4 flex items-center gap-2 rounded-xl border border-gold/20 bg-gold/5 px-3 py-2 font-mono text-[10px] tracking-wider text-gold/90">
+              <Loader className="size-3 animate-spin" strokeWidth={1.5} />
+              生成中 · {active.content.sections.length} 章已完成
+            </p>
+          ) : null}
           <h2 className="font-display text-2xl font-semibold leading-snug text-paper">
             {active.content.title}
           </h2>
@@ -514,6 +525,8 @@ export function ArticlePanel({
               >
                 {a.status === "failed" ? (
                   <X className="size-3" strokeWidth={1.5} />
+                ) : a.status === "interrupted" ? (
+                  <X className="size-3 text-gold/70" strokeWidth={1.5} />
                 ) : a.status === "streaming" ? (
                   <RotateCcw className="size-3 animate-spin" strokeWidth={1.5} />
                 ) : null}
@@ -532,7 +545,7 @@ export function ArticlePanel({
           <p className="max-w-xs text-xs leading-relaxed text-paper-faint">
             基于转写稿与全景画面生成带章节、时间出处和内容导图的文章。挑选深度后点上方按钮开始。
           </p>
-          {active?.status === "failed" && active.error ? (
+          {(active?.status === "failed" || active?.status === "interrupted") && active.error ? (
             <p className="max-w-sm break-all font-mono text-[10px] leading-relaxed text-danger/70">
               {active.error}
             </p>

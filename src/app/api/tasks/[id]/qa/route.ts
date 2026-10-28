@@ -55,7 +55,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           // 客户端已断开
         }
       };
-      const activity = rt.activities.start({ taskId: id, kind: "model", stage: "qa" });
+      const runId = rt.activities.newRunId();
+      const activity = rt.activities.start({
+        taskId: id,
+        kind: "qa",
+        runId,
+        phase: "qa",
+        title: question.slice(0, 40),
+      });
       try {
         const result = await rt.qaService.ask({
           taskId: id,
@@ -64,12 +71,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           question,
           onDelta: (delta) => send("delta", { delta }),
         });
-        rt.activities.finish(activity.id, { ok: true, message: question.slice(0, 120) });
+        rt.activities.finish(activity.id, {
+          ok: true,
+          status: "completed",
+          message: question.slice(0, 120),
+        });
         send("done", result.message);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logError("qa request failed", { task_id: id, trace_id: traceId, ...errorFields(err) });
-        rt.activities.finish(activity.id, { ok: false, message });
+        rt.activities.finish(activity.id, { ok: false, status: "failed", message: message.slice(0, 200) });
         send("error", { message, request_id: traceId });
       } finally {
         try {

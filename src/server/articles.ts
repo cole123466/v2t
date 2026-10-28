@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { getLlmConfig } from "./config";
 import type { Db } from "./db";
 import { bind, row as one, rows as many } from "./sql";
+import type { ActivityStore } from "./activities";
 import type { LLMMessage, LLMProvider } from "./generations";
 import { elapsedMs, errorFields, logError, logInfo, logWarn } from "./log";
 import {
@@ -21,7 +22,7 @@ export type ArticleDetailLevel = "concise" | "standard" | "detailed";
 export interface ArticleRecord {
   id: string;
   taskId: string;
-  status: "streaming" | "done" | "failed";
+  status: "streaming" | "done" | "failed" | "interrupted";
   title: string | null;
   /** 完整文章 JSON（成功后才有） */
   content: Article | null;
@@ -253,6 +254,8 @@ export interface ArticleServiceOptions {
   llm: LLMProvider;
   /** 读取帧图片为 data url；缺省表示不发送图片 */
   readFrame?: (file: string) => Promise<string | null>;
+  /** 步骤记录（07 号票：进度真实、刷新可见） */
+  activities?: ActivityStore;
 }
 
 export interface GenerateArticleInput {
@@ -304,9 +307,22 @@ export class ArticleService {
       this.opts.store.update(record.id, { model: used });
     };
 
+    const runId = this.opts.activities?.newRunId() ?? null;
+    // 记录当前 run 里最后一批 section 步骤 id，便于每章完成时置状态
+    const sectionStepIds: string[] = [];
+    const steps = this.opts.activities;
+    const outlineStep = steps?.start({
+      taskId: input.taskId,
+      kind: "stage",
+      runId,
+      phase: "outline",
+      title: "生成提纲",
+      articleId: record.id,
+    });
+    input.onProgress?.({ stage: "outline" });
+
     try {
       // 第一步：提纲
-      input.onProgress?.({ stage: "outline" });
       const outlineAt = Date.now();
       const outlineRaw = await this.opts.llm.generate(
         [
@@ -324,6 +340,29 @@ export class ArticleService {
       );
       const outline = this.parseOutline(outlineRaw);
       this.opts.store.update(record.id, { outline, title: outline.title });
+      steps?.finish(outlineStep!.id, {
+        ok: true,
+        status: "completed",
+        message: `${outline.sections.length} 章`,
+      });
+      // 计划即步骤集合：预插入 N 条 queued 章节步骤（D4：不落库计划快照）
+      const planAt = new Date().toISOString();
+      sectionStepIds.length = 0;
+      if (steps) {
+        for (let s = 0; s < outline.sections.length; s++) {
+          const step = steps.start({
+            taskId: input.taskId,
+            kind: "section",
+            runId,
+            phase: "write",
+            title: `第 ${s + 1} 章 · ${outline.sections[s].title}`,
+            status: "queued",
+            articleId: record.id,
+            startedAt: planAt,
+          });
+          sectionStepIds.push(step.id);
+        }
+      }
       logInfo("article outline ready", {
         task_id: input.taskId,
         trace_id: input.traceId,
@@ -337,6 +376,8 @@ export class ArticleService {
       for (let i = 0; i < outline.sections.length; i++) {
         if (input.signal?.aborted) throw new Error("客户端已断开，文章生成已中止");
         const section = outline.sections[i];
+        const sectionStepId = sectionStepIds[i];
+        steps?.updateStatus(sectionStepId, "running");
         input.onProgress?.({
           stage: "section",
           message: `${i + 1}/${outline.sections.length} ${section.title}`,
@@ -448,6 +489,18 @@ export class ArticleService {
           title: parsed.title?.trim() || section.title,
           blocks: parsedBlocks,
         });
+        // 章节增量落库：content 与步骤 completed 必须相邻落库（同一同步块内），
+        // 保证「步骤 completed ⇒ 内容已可读」（07 号票验收 2/3 的前提）
+        this.opts.store.update(record.id, {
+          content: normalizeArticle({
+            title: outline.title,
+            sections: [...sections],
+            mindMap: outline.mindMap,
+            limitations: [],
+          }),
+          status: "streaming",
+        });
+        steps?.updateStatus(sectionStepId, "completed");
         logInfo("article section ready", {
           task_id: input.taskId,
           trace_id: input.traceId,
@@ -467,20 +520,38 @@ export class ArticleService {
         mindMap: outline.mindMap,
         limitations: [],
       });
+      const validateStep = steps?.start({
+        taskId: input.taskId,
+        kind: "stage",
+        runId,
+        phase: "validate",
+        title: "校验引用与结构",
+        articleId: record.id,
+      });
       const problems = [
         ...validateStructure(article),
         ...validateBlocks(article, input.catalog),
         ...validateCitations(article, input.catalog),
       ];
       if (problems.length > 0) {
-        throw new Error(
-          `文章校验未通过：${problems
-            .slice(0, 8)
-            .map((p) => p.message)
-            .join("；")}`,
-        );
+        const msg = `文章校验未通过：${problems
+          .slice(0, 8)
+          .map((p) => p.message)
+          .join("；")}`;
+        steps?.finish(validateStep!.id, { ok: false, status: "failed", message: msg.slice(0, 200) });
+        throw new Error(msg);
       }
+      steps?.finish(validateStep!.id, { ok: true, status: "completed" });
+      const publishStep = steps?.start({
+        taskId: input.taskId,
+        kind: "stage",
+        runId,
+        phase: "publish",
+        title: "发布文章",
+        articleId: record.id,
+      });
       this.opts.store.update(record.id, { content: article, status: "done", title: article.title });
+      steps?.finish(publishStep!.id, { ok: true, status: "completed" });
       logInfo("article generation completed", {
         task_id: input.taskId,
         trace_id: input.traceId,
@@ -492,7 +563,25 @@ export class ArticleService {
       return { ...record, outline, content: article, status: "done", title: article.title };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.opts.store.update(record.id, { status: "failed", error: message });
+      // 步骤终态回写：客户端断开 → 当前步骤 canceled；其余失败 → failed
+      const aborted = input.signal?.aborted === true || message.includes("已中止");
+      const runningIds = steps
+        ? this.runningStepIds(runId)
+        : [];
+      for (const sid of runningIds) {
+        steps!.updateStatus(sid, aborted ? "canceled" : "failed", aborted ? "生成已中断" : message.slice(0, 200));
+      }
+      if (outlineStep && !steps?.get(outlineStep.id)?.endedAt) {
+        steps?.finish(outlineStep.id, {
+          ok: false,
+          status: aborted ? "canceled" : "failed",
+          message: aborted ? "生成已中断" : message.slice(0, 200),
+        });
+      }
+      this.opts.store.update(record.id, {
+        status: "failed",
+        error: aborted ? "生成已中断，可重新生成" : message,
+      });
       logError("article generation failed", {
         task_id: input.taskId,
         trace_id: input.traceId,
@@ -502,6 +591,12 @@ export class ArticleService {
       });
       throw err;
     }
+  }
+
+  /** 当前 run 里仍处于 running 的步骤 id（失败回写用） */
+  private runningStepIds(runId: string | null): string[] {
+    if (!runId || !this.opts.activities) return [];
+    return this.opts.activities.runningIdsForRun(runId);
   }
 
   /** 校验失败的成品也保留记录并抛出可读错误（由调用方决定是否重试） */

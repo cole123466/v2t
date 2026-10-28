@@ -69,6 +69,30 @@ const TABLES = [
      limitations TEXT,
      created_at TEXT NOT NULL
    );`,
+  // 14 号票（decision-data-migration）：一次性数据改判标记表
+  `CREATE TABLE IF NOT EXISTS data_fixes (
+     key TEXT PRIMARY KEY,
+     applied_at TEXT NOT NULL
+   );`,
+  // 08 号票（decision-background-execution）的 jobs 表：14 号票的启动序列要求
+  // DDL 先于 worker 存在，故在此建表；worker 逻辑在 08 号票落地
+  `CREATE TABLE IF NOT EXISTS jobs (
+     id TEXT PRIMARY KEY,
+     task_id TEXT NOT NULL,
+     kind TEXT NOT NULL,
+     status TEXT NOT NULL,
+     phase TEXT,
+     attempt_no INTEGER NOT NULL DEFAULT 1,
+     failure_count INTEGER NOT NULL DEFAULT 0,
+     outline_json TEXT,
+     done_sections INTEGER NOT NULL DEFAULT 0,
+     total_sections INTEGER NOT NULL DEFAULT 0,
+     article_id TEXT,
+     retry_of_job_id TEXT,
+     error TEXT,
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL
+   );`,
 ];
 
 /** 追加列（幂等：重复执行时忽略 duplicate column 错误） */
@@ -82,6 +106,23 @@ const COLUMNS: Array<{ table: string; column: string; ddl: string }> = [
   { table: "tasks", column: "source_notice", ddl: "TEXT" },
   // 设备归属：空串是加隔离之前的历史任务
   { table: "tasks", column: "owner", ddl: "TEXT NOT NULL DEFAULT ''" },
+  // 07 号票（decision-progress-model）：步骤模型——run / seq / phase / title / status 等
+  { table: "activities", column: "run_id", ddl: "TEXT" },
+  { table: "activities", column: "seq", ddl: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "activities", column: "phase", ddl: "TEXT" },
+  { table: "activities", column: "title", ddl: "TEXT" },
+  { table: "activities", column: "status", ddl: "TEXT" },
+  { table: "activities", column: "parent_id", ddl: "TEXT" },
+  { table: "activities", column: "attempt_no", ddl: "INTEGER NOT NULL DEFAULT 1" },
+  { table: "activities", column: "article_id", ddl: "TEXT" },
+  { table: "activities", column: "usage_json", ddl: "TEXT" },
+];
+
+/** 追加索引（幂等） */
+const INDEXES = [
+  "CREATE INDEX IF NOT EXISTS activities_run ON activities(run_id, seq)",
+  "CREATE INDEX IF NOT EXISTS activities_task_run ON activities(task_id, run_id)",
+  "CREATE INDEX IF NOT EXISTS jobs_pick ON jobs(status, created_at)",
 ];
 
 export function openDb(file: string): Db {
@@ -95,5 +136,26 @@ export function openDb(file: string): Db {
       .get(table, column);
     if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
   }
+  for (const sql of INDEXES) db.exec(sql);
   return db;
+}
+
+/**
+ * 一次性数据改判（14 号票）：同一 key 只执行一次，重复启动跳过。
+ * 与幂等 DDL 的分工：DDL 可重复执行；数据修复重复执行为害，用 data_fixes 单行标记。
+ * 必须在 worker 启动之前调用，避免与任务领取产生矛盾状态。
+ */
+export function applyOnce(db: Db, key: string, fn: () => void): boolean {
+  const done = db.prepare("SELECT 1 FROM data_fixes WHERE key = ?").get(key);
+  if (done) return false;
+  db.exec("BEGIN");
+  try {
+    fn();
+    db.prepare("INSERT INTO data_fixes (key, applied_at) VALUES (?, ?)").run(key, new Date().toISOString());
+    db.exec("COMMIT");
+    return true;
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 }
