@@ -85,6 +85,7 @@ function ArticleFrame({
   caption,
   times,
   onSeek,
+  onAskFrame,
 }: {
   taskId: string;
   frameId: string;
@@ -92,6 +93,7 @@ function ArticleFrame({
   caption?: string;
   times: Map<string, number>;
   onSeek: (t: number) => void;
+  onAskFrame?: (frameId: string) => void;
 }) {
   const [failed, setFailed] = useState(false);
   if (failed) return null;
@@ -119,6 +121,16 @@ function ArticleFrame({
           {caption ? <InlineText text={caption} times={times} onSeek={onSeek} /> : frameId.toUpperCase()}
         </span>
         <span className="shrink-0">{clock(tSec)}</span>
+        {onAskFrame ? (
+          <button
+            type="button"
+            onClick={() => onAskFrame(frameId)}
+            title={`就 ${frameId.toUpperCase()} 这张画面提问`}
+            className="shrink-0 rounded-md border border-gold/30 bg-gold/10 px-1.5 py-0.5 font-mono text-[10px] text-gold transition-colors hover:bg-gold/20"
+          >
+            问这张画面
+          </button>
+        ) : null}
       </figcaption>
     </figure>
   );
@@ -129,11 +141,13 @@ export function ArticleBlockView({
   block,
   times,
   onSeek,
+  onAskFrame,
 }: {
   taskId: string;
   block: ArticleBlock;
   times: Map<string, number>;
   onSeek: (t: number) => void;
+  onAskFrame?: (frameId: string) => void;
 }) {
   switch (block.type) {
     case "paragraph":
@@ -223,6 +237,7 @@ export function ArticleBlockView({
           caption={block.caption}
           times={times}
           onSeek={onSeek}
+          onAskFrame={onAskFrame}
         />
       );
     }

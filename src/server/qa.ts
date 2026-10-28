@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeCitations } from "./article";
 import { citationRetryNote } from "@/lib/citations";
 import type { Transcript, TranscriptSegment } from "./asr";
+import type { Article } from "./article";
 import type { Db } from "./db";
 import { bind, rows as many } from "./sql";
 import type { LLMProvider } from "./generations";
@@ -457,13 +458,14 @@ export interface AskInput {
   traceId?: string;
   transcript: Transcript;
   question: string;
-  /** 提问锚点（选段/文稿/选帧），服务端已校验过 */
+  /** 选段 / 文稿 / 选帧锚点（已在路由层校验过） */
   context?: QaContext | null;
+  /** frame 锚点的单帧 dataURL（路由层读文件，服务保持无 IO） */
+  contextImage?: string | null;
   /** 本轮 turn id：由服务端生成，user 行与 assistant 行共享 */
   turnId?: string;
   /** 中止信号：客户端断开或点「停止」时掐断上游 LLM 请求 */
-  signal?: AbortSignal;
-  onDelta?: (delta: string) => void;
+  signal?: AbortSignal;  onDelta?: (delta: string) => void;
 }
 
 export class QaService {
@@ -498,6 +500,21 @@ export class QaService {
       context: input.context ?? null,
     });
 
+    const ctx = input.context ?? null;
+    const frameId = ctx?.kind === "frame" ? ctx.frameId : null;
+    // grounded 铁律：选帧追问的回答必须引用该帧，无法确认就明说
+    const frameToken = frameId ? `[[${frameId}]]` : null;
+
+    // 选段 / 选帧的注入前缀：告诉模型用户盯的是哪一段
+    let anchorNote = "";
+    if (ctx?.kind === "section" || ctx?.kind === "transcript") {
+      const origin =
+        ctx.kind === "section"
+          ? "文章选段"
+          : `${formatTime(input.transcript.segments[ctx.segmentIndex]?.start ?? 0)}`;
+      anchorNote = `用户选中了这段：\n> ${ctx.quote}\n（出自 ${origin}），请针对这段回答。\n\n`;
+    }
+
     // 取材策略：短稿全给；长稿先检索，检索空手则全片抽样（跨语言提问的兜底）
     const all = input.transcript.segments;
     const full = shouldSendFullTranscript(all);
@@ -527,34 +544,52 @@ export class QaService {
 
     // 一次问答最多两次调用：出现非法编号时重问一次（15 号票 C1/C5），
     // 仍非法则降级交付（移除编号 + limitations 声明），绝不交付假证据。
+    // 选帧追问另有 grounded 预算（轮级 2 次）：回答缺 [[fNN]] 时重问一次，仍缺则整轮失败。
     const runOnce = async (extraNote: string, emitDelta: boolean): Promise<{
       normalized: string;
       parsedLimitations: string[];
       valid: QaCitation[];
       invalidTokens: string[];
+      raw: string;
     }> => {
-      const userContent = [
-        `问题：${question}`,
-        "",
-        candidates.length === 0
-          ? "（转写稿为空，只能说明无法回答）"
-          : sampled
-            ? "（未检索到直接相关段落，以下是全片均匀抽样，请据此判断能否回答）"
-            : full
-              ? "完整转写稿："
-              : "相关转写段落：",
-        context,
-        "",
-        "只输出 JSON：",
-        '{"answer":"回答正文，含 [[tNN]] 引用","limitations":["未确认之处"]}',
-        extraNote,
-      ].join("\n");
+      const frameRequirement = frameToken
+        ? `\n\n硬性要求：回答必须引用 [[${frameId}]]（用户选中的画面编号）；无法从画面确认的内容就写"无法确认"，不要编造。`
+        : "";
+      const userText =
+        anchorNote +
+        [
+          `问题：${question}`,
+          "",
+          candidates.length === 0
+            ? "（转写稿为空，只能说明无法回答）"
+            : sampled
+              ? "（未检索到直接相关段落，以下是全片均匀抽样，请据此判断能否回答）"
+              : full
+                ? "完整转写稿："
+                : "相关转写段落：",
+          context,
+          "",
+          "只输出 JSON：",
+          '{"answer":"回答正文，含 [[tNN]] 引用","limitations":["未确认之处"]}',
+          extraNote,
+          frameRequirement,
+        ].join("\n");
+      // 单帧注入：照 articles.ts 的多模态 content 写法
+      const userMessage = input.contextImage
+        ? {
+            role: "user" as const,
+            content: [
+              { type: "text" as const, text: userText },
+              { type: "image_url" as const, image_url: { url: input.contextImage } },
+            ],
+          }
+        : { role: "user" as const, content: userText };
       let raw: string;
       try {
         raw = await this.opts.llm.generate(
           [
             { role: "system", content: QA_SYSTEM },
-            { role: "user", content: userContent },
+            userMessage,
           ],
           (delta) => emitDelta && input.onDelta?.(delta),
           { operation: "qa.answer", taskId: input.taskId, traceId: input.traceId, signal: input.signal },
@@ -589,7 +624,7 @@ export class QaService {
           });
         }
       }
-      return { normalized, parsedLimitations: parsed.limitations, valid, invalidTokens };
+      return { normalized, parsedLimitations: parsed.limitations, valid, invalidTokens, raw };
     };
 
     // assistant 行先落 streaming：服务端是状态真源，断连/停止时由 signal 落 canceled
@@ -614,6 +649,28 @@ export class QaService {
         const retried = await runOnce(citationRetryNote(attempt.invalidTokens, knownExample), false);
         if (retried.invalidTokens.length === 0) attempt = retried;
       }
+
+    // 选帧 grounded 铁律（P2）：回答必须引用选中帧的 [[fNN]]。
+    // 缺失时重问一次；两次都缺失则整轮失败，绝不交付无证据的回答。
+    if (frameToken && !attempt.normalized.includes(frameToken)) {
+      logWarn("qa frame citation missing, retrying once", {
+        task_id: input.taskId,
+        trace_id: input.traceId,
+        frame: frameId,
+      });
+      const retried = await runOnce(
+        `上一次回答没有引用 [[${frameId}]]。请重新回答，正文必须包含 [[${frameId}]]；如果画面无法支持结论，就在 limitations 里说明无法确认。`,
+        false,
+      );
+      if (retried.normalized.includes(frameToken)) {
+        attempt = retried;
+      } else {
+        throw new QaContextError(
+          `回答未能引用选中画面 ${frameId}，已按证据要求中止本轮`,
+          "context.frame",
+        );
+      }
+    }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // 中止 → canceled（正文保留已流出部分没有意义：内容未过白名单校验）；
@@ -633,6 +690,7 @@ export class QaService {
       });
       throw err;
     }
+
 
     // 降级交付：仍有非法编号 → 保留回答但移除编号 + 声明（lenient）
     let text = attempt.normalized;

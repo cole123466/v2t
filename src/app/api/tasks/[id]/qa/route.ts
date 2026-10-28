@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import type { Transcript } from "@/server/asr";
 import { readFrameManifest } from "@/server/frames";
 import { taskDir, transcriptPath } from "@/server/paths";
@@ -6,7 +7,7 @@ import { getRuntime } from "@/server/runtime";
 import { errorFields, logError } from "@/server/log";
 import { requestId } from "@/server/request";
 import { deviceOwner } from "@/server/owner";
-import { validateQaContext, isTurnInFlight, type QaContext } from "@/server/qa";
+import { QaContextError, validateQaContext, isTurnInFlight, type QaContext } from "@/server/qa";
 import type { Article } from "@/server/article";
 
 export const runtime = "nodejs";
@@ -125,6 +126,7 @@ export async function POST(
   const { id, traceId, rt, question, context, transcript } = prep;
 
   // 锚点白名单校验（422，DB 不落脏行）；section 锚点要对照已发布文章的块文本
+  let contextImage: string | null = null;
   if (context) {
     let article: Article | null = null;
     if (context.kind === "section") {
@@ -141,6 +143,20 @@ export async function POST(
       const field = err instanceof Error && "field" in err ? String((err as { field: unknown }).field) : "context";
       return Response.json({ error: err instanceof Error ? err.message : "锚点不合法", field }, { status: 422 });
     }
+    // 单帧注入：读帧文件转 dataURL（校验基于清单，清单在而文件缺失属异常，仍 422 拒绝）
+    if (context.kind === "frame") {
+      const frame = manifest?.frames.find((f) => f.id === context.frameId);
+      const bytes = frame
+        ? await readFile(path.join(taskDir(rt.dataDir, id), frame.file)).catch(() => null)
+        : null;
+      if (!bytes) {
+        return Response.json(
+          { error: "画面文件缺失，无法就该帧回答", field: "context.frameId" },
+          { status: 422 },
+        );
+      }
+      contextImage = `data:image/jpeg;base64,${bytes.toString("base64")}`;
+    }
   }
 
   // 会话级互斥占位：同任务已有在途问答（提问或重答）则拒绝。
@@ -150,7 +166,7 @@ export async function POST(
   }
   rt.qa.markInFlight(id);
 
-  return streamAnswer({ taskId: id, traceId, question, context, transcript, req });
+  return streamAnswer({ taskId: id, traceId, question, context, contextImage, transcript, req });
 }
 
 function streamAnswer(input: {
@@ -158,11 +174,12 @@ function streamAnswer(input: {
   traceId: string | undefined;
   question: string;
   context: QaContext | null;
+  contextImage: string | null;
   transcript: Transcript;
   req: Request;
 }): Response {
   const rt = getRuntime();
-  const { taskId, traceId, question, context, transcript, req } = input;
+  const { taskId, traceId, question, context, contextImage, transcript, req } = input;
 
   const encoder = new TextEncoder();
   // 客户端断开（刷新/停止）→ 掐断上游 LLM 请求并落 canceled，写状态在服务端
@@ -193,6 +210,7 @@ function streamAnswer(input: {
           transcript,
           question,
           context,
+          contextImage,
           signal: abort.signal,
           onDelta: (delta) => send("delta", { delta }),
         });

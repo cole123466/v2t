@@ -5,14 +5,15 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { openDb, type Db } from "@/server/db";
 import type { LLMProvider } from "@/server/generations";
 import {
+  QaContextError,
   QaService,
   QaStore,
-  QaContextError,
   retrieveSegments,
   sampleAcross,
   shouldSendFullTranscript,
   tokenize,
   validateQaContext,
+  type QaContext,
 } from "@/server/qa";
 
 let dir: string;
@@ -389,5 +390,90 @@ describe("锚点校验（09 号票 P1/P2 服务端白名单）", () => {
     ).toThrow();
     expect(() => validateQaContext({ kind: "frame", frameId: "f01" }, lookups)).not.toThrow();
     expect(() => validateQaContext({ kind: "frame", frameId: "f99" }, lookups)).toThrow(/不存在/);
+  });
+});
+
+describe("选帧追问（09 号票 P2 · grounded 铁律）", () => {
+  it("frame 锚点：单帧 dataURL 注入 user 消息，prompt 硬要求引用 [[fNN]]", async () => {
+    const store = new QaStore(db);
+    const seen: Array<string | unknown> = [];
+    const svc = new QaService({
+      store,
+      llm: {
+        async generate(messages) {
+          seen.push(messages[1].content);
+          return '{"answer":"画面显示网络结构 [[f01]]。","limitations":[]}';
+        },
+      },
+    });
+    const { message } = await svc.ask({
+      taskId: "qa-frame-1",
+      transcript: TRANSCRIPT,
+      question: "这张画面里是什么？",
+      context: { kind: "frame", frameId: "f01" },
+      contextImage: "data:image/jpeg;base64,QUJD",
+    });
+    expect(message.content).toContain("[[f01]]");
+    const content = seen[0] as Array<{ type: string; text?: string }>;
+    expect(Array.isArray(content)).toBe(true);
+    expect(content.some((p) => p.type === "image_url")).toBe(true);
+    expect(JSON.stringify(content)).toContain("必须引用 [[f01]]");
+  });
+
+  it("回答缺 [[fNN]] 时重问一次；两次都缺则整轮失败，不落 assistant 行", async () => {
+    const store = new QaStore(db);
+    let calls = 0;
+    const svc = new QaService({
+      store,
+      llm: {
+        async generate() {
+          calls++;
+          return '{"answer":"说不清的画面内容 [[t01]]。","limitations":[]}';
+        },
+      },
+    });
+    await expect(
+      svc.ask({
+        taskId: "qa-frame-2",
+        transcript: TRANSCRIPT,
+        question: "这张画面里是什么？",
+        context: { kind: "frame", frameId: "f01" },
+        contextImage: "data:image/jpeg;base64,QUJD",
+      }),
+    ).rejects.toThrow(/未能引用选中画面/);
+    expect(calls).toBe(2);
+    // 轮模型（09 号票 P3）：失败也落 assistant 行，状态 failed、error 为统一文案，
+    // 原始原因（未引用帧）只进日志——不会透出到客户端
+    const history = store.listForTask("qa-frame-2");
+    expect(history.map((m) => m.role)).toEqual(["user", "assistant"]);
+    const assistant = history[1];
+    expect(assistant.status).toBe("failed");
+    expect(assistant.error).toBe("回答失败，请稍后重试或重新提问");
+    expect(assistant.error).not.toContain("未能引用选中画面");
+  });
+
+  it("重问后引用了帧：按第二次回答交付", async () => {
+    const store = new QaStore(db);
+    let calls = 0;
+    const svc = new QaService({
+      store,
+      llm: {
+        async generate() {
+          calls++;
+          return calls === 1
+            ? '{"answer":"没提画面的回答。","limitations":[]}'
+            : '{"answer":"画面里是结构图 [[f01]]。","limitations":[]}';
+        },
+      },
+    });
+    const { message } = await svc.ask({
+      taskId: "qa-frame-3",
+      transcript: TRANSCRIPT,
+      question: "这张画面里是什么？",
+      context: { kind: "frame", frameId: "f01" },
+      contextImage: "data:image/jpeg;base64,QUJD",
+    });
+    expect(calls).toBe(2);
+    expect(message.content).toContain("[[f01]]");
   });
 });
