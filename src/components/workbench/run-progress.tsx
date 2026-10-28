@@ -96,7 +96,8 @@ export function RunProgress({
             }
             setLoaded(true);
           },
-        );
+        )
+        .catch(() => {});
     void load();
     if (!live) {
       return () => {
