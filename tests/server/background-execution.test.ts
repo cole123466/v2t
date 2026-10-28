@@ -9,7 +9,7 @@ import { runArticleJob } from "@/server/article-jobs";
 import { openDb, type Db } from "@/server/db";
 import { JobStore, JobWorker } from "@/server/jobs";
 import { taskDir, transcriptPath } from "@/server/paths";
-import type { LLMProvider } from "@/server/generations";
+import type { LLMMessage, LLMProvider } from "@/server/generations";
 
 let dir: string;
 let db: Db;
@@ -199,10 +199,24 @@ describe("08 号票：后台执行", () => {
         limitations: [],
       },
     });
-    // LLM：resume 不应再要提纲；章节调用只应发生 1 次（第 2 章）
+    // LLM：resume 不应再要提纲；章节调用只应发生 1 次（第 2 章），核对 1 次
     let sectionCalls = 0;
+    let verifyCalls = 0;
     const llm: LLMProvider = {
-      async generate() {
+      async generate(messages: LLMMessage[]) {
+        const text = JSON.stringify(messages);
+        if (text.includes("核对员")) {
+          verifyCalls += 1;
+          return JSON.stringify({ results: [{ i: 0, verdict: "supported", reason: "" }] });
+        }
+        if (text.includes("未能支持论断")) {
+          sectionCalls += 1; // 重写也走章节形态
+          return JSON.stringify({
+            id: "s2",
+            title: "第2章",
+            blocks: [{ type: "paragraph", text: "补齐 [[t01]]" }],
+          });
+        }
         sectionCalls += 1;
         return JSON.stringify({
           id: "s2",
@@ -228,7 +242,9 @@ describe("08 号票：后台执行", () => {
       new AbortController().signal,
       () => {},
     );
-    expect(sectionCalls).toBe(1); // 只补了第 2 章
+    expect(sectionCalls).toBe(1); // 只补了第 2 章（语义核对调用已分流给 verifyCalls）
+    // 核对恰好 1 次：只补的 s2 有 [[t01]] 引用需要核对，s1 跳过不再核对
+    expect(verifyCalls).toBe(1);
     const after = h.articles.get(record.id)!;
     expect(after.status).toBe("done");
     expect(after.content?.sections).toHaveLength(2);

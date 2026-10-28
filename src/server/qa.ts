@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { normalizeCitations } from "./article";
+import { citationRetryNote } from "@/lib/citations";
 import type { Transcript, TranscriptSegment } from "./asr";
 import type { Db } from "./db";
 import { bind, rows as many } from "./sql";
 import type { LLMProvider } from "./generations";
-import { elapsedMs, errorFields, logError, logInfo } from "./log";
+import { elapsedMs, errorFields, logError, logInfo, logWarn } from "./log";
 
 /** 回答中的时间引用（点击联动播放器） */
 export interface QaCitation {
@@ -13,6 +14,11 @@ export interface QaCitation {
   start: number;
   end: number;
   quote: string;
+  /**
+   * 15 号票：仅语义核对产生的结论（问答链路本期不做核对，恒为 null）；
+   * 老数据无此字段，读取时视为 null，不因新增字段报错。
+   */
+  verified?: "supported" | "unsupported" | "partial" | null;
 }
 
 /** 引用编号（tNN）→ 段落下标 */
@@ -27,6 +33,98 @@ export interface QaAnswer {
   limitations: string[];
 }
 
+/**
+ * 09 号票 P3：追问锚点。服务端校验白名单外的形状直接拒绝（422）。
+ * quote 与目标块文本做「前缀+包含」核对，容忍选区截断，不要求逐字全等。
+ */
+export type QaContext =
+  | { kind: "section"; sectionId: string; blockIndex: number; quote: string }
+  | { kind: "transcript"; segmentIndex: number; quote: string }
+  | { kind: "frame"; frameId: string };
+
+export const MAX_QUOTE_CHARS = 200;
+
+/** 锚点校验失败的原因，路由层转 422（field 对齐 15 号 strict 词汇表） */
+export class QaContextError extends Error {
+  constructor(
+    message: string,
+    readonly field: string,
+  ) {
+    super(message);
+  }
+}
+
+type SectionLookup = (sectionId: string) => { blocks: ReadonlyArray<unknown> } | null;
+type FrameLookup = (frameId: string) => { id: string; tSec: number } | null;
+/** 按序号取转写段（quote 内容核对用），越界返回 null */
+type SegmentLookup = (segmentIndex: number) => { text: string } | null;
+
+/**
+ * 锚点白名单校验（对齐 15 号 strict 词汇表）：
+ * - quote ≤ 200 字，与目标块/转写段文本做前缀/包含核对（容忍选区截断）
+ * - frame 锚点必须在帧目录内
+ */
+export function validateQaContext(
+  context: QaContext,
+  lookups: { section: SectionLookup; frame: FrameLookup; segment: SegmentLookup },
+): void {
+  if (!context || typeof context !== "object") {
+    throw new QaContextError("锚点格式不合法", "context");
+  }
+  if (context.kind === "section") {
+    if (
+      typeof context.sectionId !== "string" ||
+      !Number.isInteger(context.blockIndex) ||
+      context.blockIndex < 0 ||
+      typeof context.quote !== "string" ||
+      context.quote.length === 0
+    ) {
+      throw new QaContextError("锚点格式不合法", "context");
+    }
+    if (context.quote.length > MAX_QUOTE_CHARS) {
+      throw new QaContextError(`选段不能超过 ${MAX_QUOTE_CHARS} 字`, "context.quote");
+    }
+    const section = lookups.section(context.sectionId);
+    const block = section?.blocks[context.blockIndex] as { text?: unknown } | undefined;
+    const text = typeof block?.text === "string" ? block.text : null;
+    if (!text) throw new QaContextError("选段锚点指向不存在的块", "context");
+    if (!text.startsWith(context.quote) && !text.includes(context.quote)) {
+      throw new QaContextError("选段内容与文章不符", "context.quote");
+    }
+    return;
+  }
+  if (context.kind === "transcript") {
+    if (
+      !Number.isInteger(context.segmentIndex) ||
+      context.segmentIndex < 0 ||
+      typeof context.quote !== "string" ||
+      context.quote.length === 0
+    ) {
+      throw new QaContextError("文稿锚点格式不合法", "context");
+    }
+    if (context.quote.length > MAX_QUOTE_CHARS) {
+      throw new QaContextError(`选段不能超过 ${MAX_QUOTE_CHARS} 字`, "context.quote");
+    }
+    // 与 section 分支同强度：quote 必须能在目标段文本中找到，防止伪造文稿选段
+    const segment = lookups.segment(context.segmentIndex);
+    if (!segment) throw new QaContextError("文稿锚点指向不存在的段", "context");
+    if (!segment.text.startsWith(context.quote) && !segment.text.includes(context.quote)) {
+      throw new QaContextError("选段内容与文稿不符", "context.quote");
+    }
+    return;
+  }
+  if (context.kind === "frame") {
+    if (typeof context.frameId !== "string" || !lookups.frame(context.frameId)) {
+      throw new QaContextError("画面锚点指向不存在的帧", "context");
+    }
+    return;
+  }
+  throw new QaContextError("锚点格式不合法", "context");
+}
+
+/** assistant 行的状态机：streaming → completed | canceled | failed */
+export type QaTurnStatus = "streaming" | "completed" | "canceled" | "failed";
+
 export interface QaMessage {
   id: string;
   taskId: string;
@@ -35,6 +133,16 @@ export interface QaMessage {
   citations: QaCitation[] | null;
   limitations: string[] | null;
   createdAt: string;
+  /** 同一轮的 user 行与 assistant 行共享；老数据 NULL，读投影按相邻对合成 */
+  turnId: string | null;
+  /** 仅 assistant 行：streaming|completed|canceled|failed */
+  status: QaTurnStatus | null;
+  /** 提问锚点（落在 user 行上） */
+  context: QaContext | null;
+  /** 仅 assistant 行失败时 */
+  error: string | null;
+  /** 请求追踪编号（失败卡排障用；成功轮不展示） */
+  requestId: string | null;
 }
 
 interface QaRow {
@@ -45,6 +153,11 @@ interface QaRow {
   citations: string | null;
   limitations: string | null;
   created_at: string;
+  turn_id: string | null;
+  status: string | null;
+  context: string | null;
+  error: string | null;
+  request_id: string | null;
 }
 
 function toMessage(row: QaRow): QaMessage {
@@ -56,11 +169,32 @@ function toMessage(row: QaRow): QaMessage {
     citations: row.citations ? (JSON.parse(row.citations) as QaCitation[]) : null,
     limitations: row.limitations ? (JSON.parse(row.limitations) as string[]) : null,
     createdAt: row.created_at,
+    turnId: row.turn_id,
+    status: (row.status as QaTurnStatus | null) ?? null,
+    context: row.context ? (JSON.parse(row.context) as QaContext) : null,
+    error: row.error,
+    requestId: row.request_id,
   };
 }
 
 export class QaStore {
+  /** 会话级互斥：同任务在途问答（提问/重答）的占位表，进程内内存态。
+   *  用于 POST /qa 与 retry 的并发互斥，占位先于任何 await，消除校验 TOCTOU。 */
+  private readonly inFlightTasks = new Set<string>();
+
   constructor(private readonly db: Db) {}
+
+  markInFlight(taskId: string): void {
+    this.inFlightTasks.add(taskId);
+  }
+
+  markSettled(taskId: string): void {
+    this.inFlightTasks.delete(taskId);
+  }
+
+  hasInFlight(taskId: string): boolean {
+    return this.inFlightTasks.has(taskId);
+  }
 
   add(input: {
     taskId: string;
@@ -68,6 +202,10 @@ export class QaStore {
     content: string;
     citations?: QaCitation[] | null;
     limitations?: string[] | null;
+    turnId?: string | null;
+    status?: QaTurnStatus | null;
+    context?: QaContext | null;
+    requestId?: string | null;
   }): QaMessage {
     const message: QaMessage = {
       id: randomUUID(),
@@ -77,20 +215,60 @@ export class QaStore {
       citations: input.citations ?? null,
       limitations: input.limitations ?? null,
       createdAt: new Date().toISOString(),
+      turnId: input.turnId ?? null,
+      status: input.status ?? null,
+      context: input.context ?? null,
+      error: null,
+      requestId: input.requestId ?? null,
     };
     this.db
       .prepare(
-        `INSERT INTO qa_messages (id, task_id, role, content, citations, limitations, created_at)
-         VALUES (@id, @taskId, @role, @content, @citations, @limitations, @createdAt)`,
+        `INSERT INTO qa_messages (id, task_id, role, content, citations, limitations, created_at, turn_id, status, context, error, request_id)
+         VALUES (@id, @taskId, @role, @content, @citations, @limitations, @createdAt, @turnId, @status, @context, @error, @requestId)`,
       )
       .run(
         bind({
           ...message,
           citations: message.citations ? JSON.stringify(message.citations) : null,
           limitations: message.limitations ? JSON.stringify(message.limitations) : null,
+          context: message.context ? JSON.stringify(message.context) : null,
         }),
       );
     return message;
+  }
+
+  /** 轮状态回写：服务端 abort / 失败时落终态（写状态的动作在服务端，不依赖客户端活着）。
+   *  仅 streaming 行可写：终态（canceled/failed/completed）不可被后续回写覆盖，
+   *  避免「停止刚落 canceled、完成回写又改成 completed」的竞态。 */
+  updateStatus(id: string, patch: { status: QaTurnStatus; error?: string | null; requestId?: string | null }): void {
+    this.db
+      .prepare(
+        "UPDATE qa_messages SET status = @status, error = COALESCE(@error, error), request_id = COALESCE(@requestId, request_id) WHERE id = @id AND status = 'streaming'",
+      )
+      .run(bind({ id, status: patch.status, error: patch.error ?? null, requestId: patch.requestId ?? null }));
+  }
+
+  /** 完成回写：把 streaming 行填充为终态正文，返回 assistant 消息。
+   *  仅 streaming 行可写，返回 null 表示该行已被停止/失败落成终态（不覆盖）。 */
+  finishStreaming(
+    id: string,
+    patch: { content: string; citations: QaCitation[]; limitations: string[] },
+  ): QaMessage | null {
+    const changed = this.db
+      .prepare(
+        "UPDATE qa_messages SET content = @content, citations = @citations, limitations = @limitations, status = 'completed', error = NULL WHERE id = @id AND status = 'streaming'",
+      )
+      .run(
+        bind({
+          id,
+          content: patch.content,
+          citations: JSON.stringify(patch.citations),
+          limitations: JSON.stringify(patch.limitations),
+        }),
+      );
+    if (changed.changes === 0) return null;
+    const row = this.db.prepare("SELECT * FROM qa_messages WHERE id = ?").get(id) as unknown as QaRow;
+    return toMessage(row);
   }
 
   listForTask(taskId: string): QaMessage[] {
@@ -102,9 +280,64 @@ export class QaStore {
     return rows.map(toMessage);
   }
 
+  /**
+   * 取某轮（turnId 或老数据的 assistant 消息 id）的全部消息。
+   * retry 端点据此还原问题与锚点。
+   */
+  getTurn(taskId: string, turnId: string): QaMessage[] {
+    const byTurn = many<QaRow>(
+      this.db
+        .prepare("SELECT * FROM qa_messages WHERE task_id = ? AND turn_id = ? ORDER BY created_at ASC, rowid ASC")
+        .all(taskId, turnId),
+    );
+    if (byTurn.length > 0) return byTurn.map(toMessage);
+    // 老数据无 turn_id：允许用 assistant 行 id 定位该轮
+    const anchor = this.db
+      .prepare("SELECT * FROM qa_messages WHERE task_id = ? AND id = ? AND role = 'assistant'")
+      .get(taskId, turnId) as unknown as QaRow | undefined;
+    if (!anchor) return [];
+    const all = this.listForTask(taskId);
+    const idx = all.findIndex((m) => m.id === anchor.id);
+    return idx > 0 && all[idx - 1].role === "user" ? [all[idx - 1], all[idx]] : [all[idx]];
+  }
+
+  /** 最后一轮的消息（重新回答按钮只出现在最后一轮） */
+  lastTurn(taskId: string): QaMessage[] {
+    const all = this.listForTask(taskId);
+    if (all.length === 0) return [];
+    const lastAssistant = [...all].reverse().find((m) => m.role === "assistant");
+    if (!lastAssistant) return [];
+    const idx = all.indexOf(lastAssistant);
+    return idx > 0 && all[idx - 1].role === "user" ? [all[idx - 1], all[idx]] : [lastAssistant];
+  }
+
+  /** 僵尸轮清理的读投影辅助：仍为 streaming 的轮（服务重启或断连遗留） */
+  staleStreamingForTask(taskId: string): QaMessage[] {
+    const rows = many<QaRow>(
+      this.db
+        .prepare(
+          "SELECT * FROM qa_messages WHERE task_id = ? AND status = 'streaming' ORDER BY created_at ASC, rowid ASC",
+        )
+        .all(taskId),
+    );
+    return rows.map(toMessage);
+  }
+
   removeAllForTask(taskId: string): void {
     this.db.prepare("DELETE FROM qa_messages WHERE task_id = ?").run(taskId);
   }
+}
+
+/**
+ * 在途问答轮登记（进程内内存态）：streaming 行不一定是僵尸——本进程正在回答的轮
+ * 也是 streaming。GET 读投影据此区分「在途」与「断连遗留」，避免把正在回答的轮
+ * 误投影成 canceled + retryable。服务重启后登记自然为空，streaming 行回落僵尸语义。
+ * 由 QaService.ask 在启动/结束时登记与注销。
+ */
+const inFlightTurns = new Set<string>();
+
+export function isTurnInFlight(turnId: string): boolean {
+  return inFlightTurns.has(turnId);
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +443,9 @@ const QA_SYSTEM =
   "你是视频内容助手。只依据提供的转写段落回答；每个关键结论后用 [[tNN]] 标注来源编号（编号来自给定目录）。" +
   "不确定或转写稿没有覆盖的内容，写进 limitations 而不是猜测。不使用表情符号，输出严格 JSON。";
 
+/** 失败轮落库/对外展示的统一文案：内部细节（URL、路径、依赖名）只进日志 */
+const QA_FAILURE_MESSAGE = "回答失败，请稍后重试或重新提问";
+
 export interface QaServiceOptions {
   store: QaStore;
   llm: LLMProvider;
@@ -221,18 +457,46 @@ export interface AskInput {
   traceId?: string;
   transcript: Transcript;
   question: string;
+  /** 提问锚点（选段/文稿/选帧），服务端已校验过 */
+  context?: QaContext | null;
+  /** 本轮 turn id：由服务端生成，user 行与 assistant 行共享 */
+  turnId?: string;
+  /** 中止信号：客户端断开或点「停止」时掐断上游 LLM 请求 */
+  signal?: AbortSignal;
   onDelta?: (delta: string) => void;
 }
 
 export class QaService {
   constructor(private readonly opts: QaServiceOptions) {}
 
-  async ask(input: AskInput): Promise<{ message: QaMessage; answer: QaAnswer }> {
+  async ask(input: AskInput): Promise<{ message: QaMessage; answer: QaAnswer; turnId: string }> {
     const question = input.question.trim();
     if (!question) throw new Error("问题不能为空");
 
     const startedAt = Date.now();
-    this.opts.store.add({ taskId: input.taskId, role: "user", content: question });
+    const turnId = input.turnId ?? randomUUID();
+    // 登记在途轮：GET 读投影据此不把正在回答的轮投影成僵尸 canceled
+    inFlightTurns.add(turnId);
+    try {
+      return await this.runAsk(input, question, startedAt, turnId);
+    } finally {
+      inFlightTurns.delete(turnId);
+    }
+  }
+
+  private async runAsk(
+    input: AskInput,
+    question: string,
+    startedAt: number,
+    turnId: string,
+  ): Promise<{ message: QaMessage; answer: QaAnswer; turnId: string }> {
+    this.opts.store.add({
+      taskId: input.taskId,
+      role: "user",
+      content: question,
+      turnId,
+      context: input.context ?? null,
+    });
 
     // 取材策略：短稿全给；长稿先检索，检索空手则全片抽样（跨语言提问的兜底）
     const all = input.transcript.segments;
@@ -256,92 +520,158 @@ export class QaService {
       .map((c) => `[t${String(c.index + 1).padStart(2, "0")}] ${formatTime(c.segment.start)}-${formatTime(c.segment.end)} ${c.segment.text}`)
       .join("\n");
 
-    let raw: string;
+    const knownExample =
+      input.transcript.segments.length > 0
+        ? `[[t01]]…[[t${String(input.transcript.segments.length).padStart(2, "0")}]]`
+        : "（转写稿为空，正文不要写引用标记）";
+
+    // 一次问答最多两次调用：出现非法编号时重问一次（15 号票 C1/C5），
+    // 仍非法则降级交付（移除编号 + limitations 声明），绝不交付假证据。
+    const runOnce = async (extraNote: string, emitDelta: boolean): Promise<{
+      normalized: string;
+      parsedLimitations: string[];
+      valid: QaCitation[];
+      invalidTokens: string[];
+    }> => {
+      const userContent = [
+        `问题：${question}`,
+        "",
+        candidates.length === 0
+          ? "（转写稿为空，只能说明无法回答）"
+          : sampled
+            ? "（未检索到直接相关段落，以下是全片均匀抽样，请据此判断能否回答）"
+            : full
+              ? "完整转写稿："
+              : "相关转写段落：",
+        context,
+        "",
+        "只输出 JSON：",
+        '{"answer":"回答正文，含 [[tNN]] 引用","limitations":["未确认之处"]}',
+        extraNote,
+      ].join("\n");
+      let raw: string;
+      try {
+        raw = await this.opts.llm.generate(
+          [
+            { role: "system", content: QA_SYSTEM },
+            { role: "user", content: userContent },
+          ],
+          (delta) => emitDelta && input.onDelta?.(delta),
+          { operation: "qa.answer", taskId: input.taskId, traceId: input.traceId, signal: input.signal },
+        );
+      } catch (err) {
+        logError("qa answer failed", {
+          task_id: input.taskId,
+          trace_id: input.traceId,
+          ...errorFields(err),
+          duration_ms: elapsedMs(startedAt),
+        });
+        throw err;
+      }
+      const parsed = parseAnswer(raw);
+      // 引用格式先规范化（模型常少写方括号），再校验编号白名单
+      const normalized = normalizeCitations(parsed.answer);
+      const valid: QaCitation[] = [];
+      const invalidTokens: string[] = [];
+      for (const token of Array.from(normalized.matchAll(/\[\[(t\d{2,})\]\]/g), (m) => m[1])) {
+        const index = citationIndex(token);
+        if (index === null || index < 0 || index >= input.transcript.segments.length) {
+          invalidTokens.push(token);
+          continue;
+        }
+        const segment = input.transcript.segments[index];
+        if (!valid.some((c) => c.segmentIndex === index)) {
+          valid.push({
+            segmentIndex: index,
+            start: segment.start,
+            end: segment.end,
+            quote: segment.text,
+          });
+        }
+      }
+      return { normalized, parsedLimitations: parsed.limitations, valid, invalidTokens };
+    };
+
+    // assistant 行先落 streaming：服务端是状态真源，断连/停止时由 signal 落 canceled
+    const streamingRow = this.opts.store.add({
+      taskId: input.taskId,
+      role: "assistant",
+      content: "",
+      turnId,
+      status: "streaming",
+      requestId: input.traceId ?? null,
+    });
+
+    let attempt: Awaited<ReturnType<typeof runOnce>>;
     try {
-      raw = await this.opts.llm.generate(
-        [
-          { role: "system", content: QA_SYSTEM },
-          {
-            role: "user",
-            content: [
-              `问题：${question}`,
-              "",
-              candidates.length === 0
-                ? "（转写稿为空，只能说明无法回答）"
-                : sampled
-                  ? "（未检索到直接相关段落，以下是全片均匀抽样，请据此判断能否回答）"
-                  : full
-                    ? "完整转写稿："
-                    : "相关转写段落：",
-              context,
-              "",
-              "只输出 JSON：",
-              '{"answer":"回答正文，含 [[tNN]] 引用","limitations":["未确认之处"]}',
-            ].join("\n"),
-          },
-        ],
-        (delta) => input.onDelta?.(delta),
-        { operation: "qa.answer", taskId: input.taskId, traceId: input.traceId },
-      );
+      attempt = await runOnce("", true);
+      if (attempt.invalidTokens.length > 0) {
+        logWarn("qa invalid citations, retrying once", {
+          task_id: input.taskId,
+          trace_id: input.traceId,
+          invalid: attempt.invalidTokens.length,
+        });
+        const retried = await runOnce(citationRetryNote(attempt.invalidTokens, knownExample), false);
+        if (retried.invalidTokens.length === 0) attempt = retried;
+      }
     } catch (err) {
-      logError("qa answer failed", {
+      const message = err instanceof Error ? err.message : String(err);
+      // 中止 → canceled（正文保留已流出部分没有意义：内容未过白名单校验）；
+      // 其余 → failed。轮状态在服务端落定，刷新后读投影直接可见。
+      const canceled = input.signal?.aborted === true || message.includes("已取消") || message.includes("已中止");
+      this.opts.store.updateStatus(streamingRow.id, {
+        status: canceled ? "canceled" : "failed",
+        // 内部错误细节只进日志；对外文案固定，避免上游 URL/路径泄露给客户端
+        error: canceled ? null : QA_FAILURE_MESSAGE,
+        requestId: input.traceId ?? null,
+      });
+      logError("qa turn failed", {
         task_id: input.taskId,
         trace_id: input.traceId,
-        ...errorFields(err),
-        duration_ms: elapsedMs(startedAt),
+        turn_id: turnId,
+        detail: message.slice(0, 200),
       });
       throw err;
     }
 
-    const parsed = parseAnswer(raw);
-    // 引用格式先规范化（模型常少写方括号），再校验编号范围
-    const normalized = normalizeCitations(parsed.answer);
-    const valid: QaCitation[] = [];
-    const invalidTokens: string[] = [];
-    for (const token of Array.from(normalized.matchAll(/\[\[(t\d{2,})\]\]/g), (m) => m[1])) {
-      const index = citationIndex(token);
-      if (index === null || index < 0 || index >= input.transcript.segments.length) {
-        invalidTokens.push(token);
-        continue;
-      }
-      const segment = input.transcript.segments[index];
-      if (!valid.some((c) => c.segmentIndex === index)) {
-        valid.push({
-          segmentIndex: index,
-          start: segment.start,
-          end: segment.end,
-          quote: segment.text,
-        });
-      }
-    }
-
-    let text = normalized;
-    for (const token of invalidTokens) {
+    // 降级交付：仍有非法编号 → 保留回答但移除编号 + 声明（lenient）
+    let text = attempt.normalized;
+    for (const token of attempt.invalidTokens) {
       text = text.split(`[[${token}]]`).join("");
     }
-    const limitations = [...parsed.limitations];
-    if (invalidTokens.length > 0) {
-      limitations.push(`已移除 ${invalidTokens.length} 个无法核实的出处编号`);
+    const limitations = [...attempt.parsedLimitations];
+    if (attempt.invalidTokens.length > 0) {
+      limitations.push(`已移除 ${attempt.invalidTokens.length} 个无法核实的出处编号`);
     }
 
-    const message = this.opts.store.add({
-      taskId: input.taskId,
-      role: "assistant",
+    // 完成回写：仅当该轮仍为 streaming 时生效；停止端点已落 canceled 时
+    // 返回 null，此时不覆盖服务端已定的终态，直接走取消语义
+    const completed = this.opts.store.finishStreaming(streamingRow.id, {
       content: text,
-      citations: valid,
+      citations: attempt.valid,
       limitations,
     });
+    if (!completed || input.signal?.aborted === true) {
+      logInfo("qa answer superseded after completion", {
+        task_id: input.taskId,
+        trace_id: input.traceId,
+        turn_id: turnId,
+        superseded: completed === null ? "terminal-state" : "aborted",
+      });
+      throw new Error("请求已取消");
+    }
     logInfo("qa answer completed", {
       task_id: input.taskId,
       trace_id: input.traceId,
-      message_id: message.id,
-      citations: valid.length,
-      invalid_citations: invalidTokens.length,
+      turn_id: turnId,
+      message_id: completed.id,
+      citations: attempt.valid.length,
+      invalid_citations: attempt.invalidTokens.length,
       limitations: limitations.length,
       chars: text.length,
       duration_ms: elapsedMs(startedAt),
     });
-    return { message, answer: { text, citations: valid, limitations } };
+    return { message: completed, answer: { text, citations: attempt.valid, limitations }, turnId };
   }
 }
 
