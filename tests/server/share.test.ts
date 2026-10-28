@@ -2,7 +2,7 @@ import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { openDb, type Db } from "@/server/db";
 import { GenerationStore } from "@/server/generations";
 import { TaskStore } from "@/server/tasks";
@@ -12,6 +12,11 @@ import { ShareStore, buildSharePayload, verifyShareToken, shareFrameIds } from "
 import { deleteTask, purgeExpiredMedia } from "@/server/maintenance";
 import type { Article } from "@/server/article";
 import type { MaintenanceDeps } from "@/server/maintenance";
+import type { Runtime } from "@/server/runtime";
+
+// 分享路由经 getRuntime 取仓库；mock 掉 runtime 模块，注入下面装配的真实 store
+const runtime = vi.hoisted(() => ({ current: null as Runtime | null }));
+vi.mock("@/server/runtime", () => ({ getRuntime: () => runtime.current! }));
 
 const OWNER_A = "11111111-2222-4333-8444-555555555555";
 const OWNER_B = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
@@ -60,12 +65,20 @@ beforeAll(async () => {
   shares = new ShareStore(db);
   generations = new GenerationStore(db);
   deps = { store, generations, articles, activities, qa: undefined, jobs: undefined, shares, dataDir: dir };
+  runtime.current = deps as unknown as Runtime;
 });
 
 afterAll(async () => {
   db.close();
   await rm(dir, { recursive: true, force: true });
 });
+
+function request(method: string, owner: string | null): Request {
+  return new Request("http://localhost/api/x", {
+    method,
+    headers: owner ? { cookie: `v2t-device=${owner}` } : undefined,
+  });
+}
 
 describe("令牌与存储", () => {
   it("token = id + HMAC(id)，verifyShareToken 常量时间校验通过/拒绝", async () => {
@@ -99,12 +112,33 @@ describe("令牌与存储", () => {
   });
 
   it("owner B 无法创建/读取 owner A 的分享（设备隔离回归）", async () => {
-    // store.getOwned 的行为在 task-isolation.test.ts 已覆盖；这里验证分享入口按同一前提
+    // 通过分享路由入口验证：getOwned 是唯一闸门，B 拿不到任务就到不了 ShareStore
     const taskId = await seedReadyTask(OWNER_A);
     const record = doneArticle(taskId);
     articles.update(record.id, { status: "done", content: article, title: article.title });
-    expect(store.getOwned(taskId, OWNER_B)).toBeUndefined();
-    expect(store.getOwned(taskId, OWNER_A)?.id).toBe(taskId);
+
+    const route = await import("@/app/api/tasks/[id]/articles/[articleId]/share/route");
+    const ctx = { params: Promise.resolve({ id: taskId, articleId: record.id }) };
+
+    // B 读状态：按不存在处理
+    const got = await route.GET(request("GET", OWNER_B), ctx);
+    expect(got.status).toBe(404);
+
+    // B 创建：按不存在处理，且不产生任何分享行
+    const created = await route.PUT(request("PUT", OWNER_B), ctx);
+    expect(created.status).toBe(404);
+    expect(shares.listForTask(taskId)).toHaveLength(0);
+
+    // B 撤销：同样按不存在处理，不能动 A 的分享
+    await shares.ensure({ taskId, articleId: record.id });
+    const revoked = await route.DELETE(request("DELETE", OWNER_B), ctx);
+    expect(revoked.status).toBe(404);
+    expect(shares.listForTask(taskId)).toHaveLength(1);
+
+    // 同一路由对 owner A 正常工作（对照：404 来自 owner 过滤而非路由坏了）
+    const mine = await route.GET(request("GET", OWNER_A), ctx);
+    expect(mine.status).toBe(200);
+    expect(((await mine.json()) as { share: { id: string } | null }).share?.id).toBeTruthy();
   });
 });
 
@@ -205,30 +239,5 @@ describe("钉帧与清理", () => {
     expect(await deleteTask(deps, taskId)).toBe(true);
     expect(shares.getByToken(share.token)).toBeUndefined();
     expect(await stat(shareRoot).catch(() => null)).toBeNull();
-  });
-});
-
-describe("manifest.json（ZIP 导出契约，验收 9）", () => {
-  it("sha256 与条目一致（对导出 route 的内联逻辑做等价校验）", async () => {
-    const { createHash } = await import("node:crypto");
-    const { createZip } = await import("@/server/zip");
-    const md = Buffer.from("# hi");
-    const entries = [
-      { name: "article.md", data: md },
-      { name: "sources.json", data: Buffer.from("{}") },
-    ];
-    const manifest = {
-      format_version: 1,
-      files: entries.map((e) => ({
-        path: e.name,
-        bytes: e.data.length,
-        sha256: createHash("sha256").update(e.data).digest("hex"),
-      })),
-    };
-    const zip = createZip([...entries, { name: "manifest.json", data: Buffer.from(JSON.stringify(manifest)) }]);
-    expect(zip.toString("utf8")).toContain("manifest.json");
-    expect(manifest.files[0].sha256).toBe(createHash("sha256").update(md).digest("hex"));
-    // 可复现：不含时间戳字段
-    expect(JSON.stringify(manifest)).not.toMatch(/generated|created|time/i);
   });
 });

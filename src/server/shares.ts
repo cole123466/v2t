@@ -47,9 +47,17 @@ function toShare(row: ShareRow): Share {
 const TOKEN_CONTEXT = "v2t-share:";
 const ID_PATTERN = /^[0-9a-f]{32}$/;
 const TOKEN_SEPARATOR = ".";
+const FRAME_ID_PATTERN = /^[a-z0-9_-]+$/i;
+
+let ephemeralSecret: string | null = null;
 
 function shareSecret(): string {
-  return process.env.SHARE_SECRET ?? "v2t-share-local";
+  const fromEnv = process.env.SHARE_SECRET;
+  if (fromEnv) return fromEnv;
+  // 缺省随机（见文件头注释）：重启即换、旧链接随之失效。
+  // 不能退回源码常量——那等于把伪造令牌的能力公开在仓库里。
+  ephemeralSecret ??= randomBytes(32).toString("hex");
+  return ephemeralSecret;
 }
 
 function hmacFor(id: string): string {
@@ -166,9 +174,15 @@ export async function pinShareFrames(
   await mkdir(outDir, { recursive: true });
   let pinned = 0;
   for (const [frameId, src] of framesToPin) {
+    // frameId 来源于文章内容，写文件前与读侧做同一道白名单防穿越
+    if (!FRAME_ID_PATTERN.test(frameId)) continue;
     const target = path.join(outDir, `${frameId}.jpg`);
-    await copyFile(src, target).catch(() => null);
-    pinned += 1;
+    try {
+      await copyFile(src, target);
+      pinned += 1;
+    } catch (error) {
+      console.warn("pinShareFrames failed:", frameId, error);
+    }
   }
   return pinned;
 }
@@ -179,7 +193,7 @@ export async function readPinnedFrame(
   frameId: string,
 ): Promise<Buffer | null> {
   // frameId 由路由白名单校验后传入，这里再防一次路径穿越
-  if (!/^[a-z0-9_-]+$/i.test(frameId)) return null;
+  if (!FRAME_ID_PATTERN.test(frameId)) return null;
   const file = path.join(shareFramesDir(dataDir, share.id), `${frameId}.jpg`);
   if (!file.startsWith(shareFramesDir(dataDir, share.id) + path.sep)) return null;
   return readFile(file).catch(() => null);

@@ -42,6 +42,10 @@ export function ShareDialog({
     fetch(`/api/tasks/${taskId}/articles/${articleId}/share`, { cache: "no-store" })
       .then((r) => (r.ok ? (r.json() as Promise<ShareInfo>) : null))
       .then((data) => setShare(data?.share ?? null))
+      .catch(() => {
+        // 加载失败不能被折叠成「无分享」：留错误提示，而不是误导用户去创建
+        setError("加载分享状态失败，请重试");
+      })
       .finally(() => setLoading(false));
 
   useEffect(() => {
@@ -63,6 +67,8 @@ export function ShareDialog({
       }
       setShare(data.share);
       void copy(data.url ?? `/s/${data.share.token}`);
+    } catch {
+      setError("创建失败，请检查网络后重试");
     } finally {
       setBusy(false);
     }
@@ -81,6 +87,8 @@ export function ShareDialog({
       }
       setShare(null);
       onClose();
+    } catch {
+      setError("取消失败，请检查网络后重试");
     } finally {
       setBusy(false);
     }

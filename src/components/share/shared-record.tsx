@@ -28,31 +28,49 @@ function clock(sec: number): string {
 export function SharedRecord({ token }: { token: string }) {
   const [payload, setPayload] = useState<SharePayload | null>(null);
   const [gone, setGone] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [showSteps, setShowSteps] = useState(false);
   // revoked 锁：404 后停止一切轮询
   const revokedRef = useRef(false);
 
   useEffect(() => {
-    const load = () =>
+    // 轮询响应无时序保证：慢的旧响应不得覆盖新的快照，token 变化后在途旧请求也不得污染新状态
+    let seq = 0;
+    const load = () => {
+      const current = ++seq;
       fetch(`/api/share/${token}`, FETCH_INIT)
         .then((r) => {
           if (r.status === 404) {
-            revokedRef.current = true;
-            setGone(true);
+            if (current === seq) {
+              revokedRef.current = true;
+              setGone(true);
+            }
             return null;
           }
           return r.ok ? (r.json() as Promise<SharePayload>) : null;
         })
         .then((data) => {
-          if (data) setPayload(data);
+          if (data && current === seq) {
+            setPayload(data);
+            setLoadFailed(false);
+          } else if (data === null && current === seq && !revokedRef.current) {
+            // 非 404 的失败（5xx/网络错误）：不能与「仍在处理中」混淆，给出可感知的错误态
+            setLoadFailed(true);
+          }
         })
-        .catch(() => {});
+        .catch(() => {
+          if (current === seq) setLoadFailed(true);
+        });
+    };
     void load();
     const timer = setInterval(() => {
       if (revokedRef.current || document.hidden) return;
-      void load();
+      load();
     }, POLL_MS);
-    return () => clearInterval(timer);
+    return () => {
+      seq += 1; // 卸载或换 token 后，在途响应一律作废
+      clearInterval(timer);
+    };
   }, [token]);
 
   if (gone) {
@@ -60,6 +78,15 @@ export function SharedRecord({ token }: { token: string }) {
       <div className="glass flex flex-col items-center gap-3 rounded-2xl border-dashed p-10 text-center">
         <X className="size-7 text-paper-faint" strokeWidth={1.5} />
         <p className="text-sm text-paper-dim">这条分享已不可用或已被取消</p>
+      </div>
+    );
+  }
+  if (loadFailed && !payload) {
+    // 首屏加载失败：与「仍在处理中」区分开，不无限转圈
+    return (
+      <div className="glass flex flex-col items-center gap-3 rounded-2xl border-dashed p-10 text-center">
+        <X className="size-7 text-danger/70" strokeWidth={1.5} />
+        <p className="text-sm text-paper-dim">加载失败，请稍后刷新重试</p>
       </div>
     );
   }
