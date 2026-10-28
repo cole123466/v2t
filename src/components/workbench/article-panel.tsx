@@ -32,6 +32,7 @@ export function ArticlePanel({
   onAskFrame,
   defaultDetail,
   defaultPurpose,
+  onSeekOverride,
 }: {
   taskId: string;
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -42,6 +43,8 @@ export function ArticlePanel({
   /** 导入页选定的默认值（12 号票 I1）：面板预填，仍可修改 */
   defaultDetail?: TaskDetailLevel | null;
   defaultPurpose?: string | null;
+  /** 阅读视图（票 B）：无播放器，时间出处点击改为跳工作台定位 */
+  onSeekOverride?: (t: number) => void;
 }) {
   const [articles, setArticles] = useState<ArticleRecord[]>([]);
   const [busy, setBusy] = useState(false);
@@ -141,6 +144,11 @@ export function ArticlePanel({
   const activeSection = useContainerSpy(contentRef, sectionIds);
 
   const seek = (t: number) => {
+    // 阅读视图没有播放器：时间出处点击交给宿主处理（跳工作台定位）
+    if (onSeekOverride) {
+      onSeekOverride(t);
+      return;
+    }
     const video = videoRef.current;
     if (!video) return;
     video.currentTime = t;
