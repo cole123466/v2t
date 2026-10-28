@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 import { getMaxUploadBytes } from "@/server/config";
+import { normalizeArticleOptions } from "@/server/articles";
 import { sourcePath, taskDir } from "@/server/paths";
 import { QUEUE_FULL_CODE, QueueFullError, queueFullMessage } from "@/server/runner";
 import { getRuntime } from "@/server/runtime";
@@ -41,6 +42,14 @@ export async function POST(req: Request) {
 
   const { store, runner, dataDir } = getRuntime();
 
+  // 12 号票 I1：导入页选定的文章默认值随查询串传入（请求体是原始文件字节）
+  const params = new URL(req.url).searchParams;
+  const options = normalizeArticleOptions({
+    detailLevel: params.get("detailLevel") ?? undefined,
+    purpose: params.get("purpose") ?? undefined,
+  });
+  if ("error" in options) return fail(options.error, 400);
+
   // 队列已满时在接收文件体之前就拒绝，避免白传一个 2GB 文件
   if (runner.isQueueFull()) {
     return Response.json(
@@ -49,7 +58,14 @@ export async function POST(req: Request) {
     );
   }
 
-  const task = store.create({ originalName, ext, sizeBytes, owner: deviceOwner(req) });
+  const task = store.create({
+    originalName,
+    ext,
+    sizeBytes,
+    owner: deviceOwner(req),
+    detailLevel: options.detailLevel,
+    purpose: options.purpose,
+  });
   const dir = taskDir(dataDir, task.id);
   const dest = sourcePath(dir, ext);
 

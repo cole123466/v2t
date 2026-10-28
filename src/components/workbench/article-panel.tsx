@@ -3,81 +3,44 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   Archive,
-  ChevronRight,
   Download,
   FileDown,
   FileText,
+  Link2,
   Loader,
   Printer,
   RotateCcw,
   X,
 } from "lucide-react";
-import type { MindMapNode } from "@/server/article";
 import type { ArticleDetailLevel, ArticleRecord } from "@/server/articles";
+import type { TaskDetailLevel } from "@/server/tasks";
+import { DETAIL_OPTIONS } from "@/lib/article-options";
 import { ArticleBlockView, InlineText } from "./article-block";
+import { ReviewSidebar } from "./review-sidebar";
+import { SelectionPopover } from "./selection-popover";
 import { RequestIdLine } from "./request-id";
+import { MindOverview } from "./mind-overview";
+import { scrollToSection, useContainerSpy } from "@/lib/container-spy";
+import { ShareDialog } from "./share-dialog";
 import { petFlow } from "@/components/pet/pet-flow";
-
-const DETAIL_OPTIONS: Array<{ value: ArticleDetailLevel; label: string; hint: string }> = [
-  { value: "concise", label: "速览", hint: "800 字内，只留核心" },
-  { value: "standard", label: "标准", hint: "信息完整而克制" },
-  { value: "detailed", label: "深入", hint: "展开推导与细节" },
-];
-
-function MindMapTree({
-  nodes,
-  activeSection,
-  onJump,
-}: {
-  nodes: MindMapNode[];
-  activeSection: string | null;
-  onJump: (sectionId: string) => void;
-}) {
-  return (
-    <ul className="space-y-1.5">
-      {nodes.map((node, i) => (
-        <li key={i}>
-          <button
-            type="button"
-            disabled={!node.sectionId}
-            onClick={() => node.sectionId && onJump(node.sectionId)}
-            className={`flex w-full items-start gap-1.5 rounded-lg px-2 py-1 text-left text-xs transition-colors ${
-              node.sectionId
-                ? activeSection === node.sectionId
-                  ? "bg-gold/10 text-gold"
-                  : "text-paper-dim hover:bg-tint/5 hover:text-paper"
-                : "text-paper-faint"
-            }`}
-          >
-            {node.sectionId ? (
-              <ChevronRight className="mt-0.5 size-3 shrink-0" strokeWidth={1.5} />
-            ) : (
-              <span className="mt-1.5 size-1 shrink-0 rounded-full bg-tint/20" />
-            )}
-            <span>{node.label}</span>
-          </button>
-          {node.children?.length ? (
-            <div className="ml-3 border-l border-tint/5 pl-1">
-              <MindMapTree
-                nodes={node.children}
-                activeSection={activeSection}
-                onJump={onJump}
-              />
-            </div>
-          ) : null}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 
 export function ArticlePanel({
   taskId,
   videoRef,
+  onAskSection,
+  onAskFrame,
+  defaultDetail,
+  defaultPurpose,
 }: {
   taskId: string;
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** 文章选段追问（09 号票 P1）：quote 已由 SelectionPopover 捕获 */
+  onAskSection?: (sectionId: string, blockIndex: number, quote: string) => void;
+  /** figure「问这张画面」（P2） */
+  onAskFrame?: (frameId: string) => void;
+  /** 导入页选定的默认值（12 号票 I1）：面板预填，仍可修改 */
+  defaultDetail?: TaskDetailLevel | null;
+  defaultPurpose?: string | null;
 }) {
   const [articles, setArticles] = useState<ArticleRecord[]>([]);
   const [busy, setBusy] = useState(false);
@@ -86,16 +49,51 @@ export function ArticlePanel({
   const [error, setError] = useState<string | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [detail, setDetail] = useState<ArticleDetailLevel>("standard");
-  const [purpose, setPurpose] = useState("");
+  const [detail, setDetail] = useState<ArticleDetailLevel>(defaultDetail ?? "standard");
+  const [purpose, setPurpose] = useState(defaultPurpose ?? "");
   const [citationTimes, setCitationTimes] = useState<Map<string, number>>(new Map());
   const [exporting, setExporting] = useState<"md" | "zip" | "html" | "pdf" | null>(null);
+  // 正文滚动容器：选区浮层定位、导图联动与章节定位都基于它（window 不滚，06 号票 K3）
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [shareOpen, setShareOpen] = useState(false);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
   const abortRef = useRef<AbortController | null>(null);
+  // 审稿旁栏「查看对应章节」的容器内定位句柄
+  const articleScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     return () => abortRef.current?.abort();
   }, []);
+
+  // 刷新恢复：挂载时若有进行中的文章，重新订阅其事件流（08 号票）
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`/api/tasks/${taskId}/articles`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { articles?: ArticleRecord[] } | null) => {
+        if (cancelled || !data?.articles) return;
+        setArticles(data.articles);
+        const streaming = data.articles.find((a) => a.status === "streaming");
+        if (streaming && !busy) {
+          setBusy(true);
+          setStage("继续接收生成进度");
+          petFlow.working();
+          const ctrl = new AbortController();
+          abortRef.current = ctrl;
+          void subscribe(streaming.id, ctrl)
+            .catch(() => {})
+            .finally(() => {
+              if (abortRef.current === ctrl) abortRef.current = null;
+              setBusy(false);
+              setStage(null);
+            });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId]);
 
   useEffect(() => {
     void fetch(`/api/tasks/${taskId}/citations`)
@@ -135,11 +133,73 @@ export function ArticlePanel({
     articles.find((a) => a.status === "streaming") ??
     articles.find((a) => a.status === "interrupted");
 
+  const sectionIds = useMemo(
+    () => active?.content?.sections.map((s) => s.id) ?? [],
+    [active],
+  );
+  const activeSection = useContainerSpy(contentRef, sectionIds);
+
   const seek = (t: number) => {
     const video = videoRef.current;
     if (!video) return;
     video.currentTime = t;
     void video.play().catch(() => {});
+  };
+
+  // 08 号票：生成改为后台任务。POST 拿 202 + jobId，随后订阅 events；
+  // 断开连接不再中止生成，刷新回来重新订阅即可。
+  const subscribe = async (articleId: string, ctrl: AbortController) => {
+    const res = await fetch(`/api/tasks/${taskId}/articles/${articleId}/events`, {
+      signal: ctrl.signal,
+    });
+    if (!res.ok || !res.body) return;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split("\n\n");
+      buffer = blocks.pop() ?? "";
+      for (const block of blocks) {
+        const event = /^event: (.+)$/m.exec(block)?.[1];
+        const dataLine = /^data: (.+)$/m.exec(block)?.[1];
+        if (!event || !dataLine) continue;
+        const data = JSON.parse(dataLine) as Record<string, unknown>;
+        if (event === "snapshot") {
+          const article = data.article as ArticleRecord | undefined;
+          if (article) {
+            setArticles((prev) => {
+              const idx = prev.findIndex((a) => a.id === article.id);
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = article;
+                return next;
+              }
+              return [article, ...prev];
+            });
+            setSelected(article.id);
+          }
+        } else if (event === "step") {
+          const stage = data.stage as string | undefined;
+          const message = data.message ? ` ${data.message}` : "";
+          if (stage === "outline") setStage("生成提纲");
+          else if (stage === "section") setStage(`撰写章节${message}`);
+          else if (data.phase) setStage(String(data.phase));
+        } else if (event === "delta") {
+          setStreamText((prev) => prev + String(data.delta ?? ""));
+        } else if (event === "done") {
+          setStage(null);
+          petFlow.done();
+          await load();
+        } else if (event === "error") {
+          petFlow.failed();
+          setError(String(data.message ?? "生成失败"));
+          setStage(null);
+        }
+      }
+    }
   };
 
   const generate = async () => {
@@ -159,55 +219,56 @@ export function ArticlePanel({
         body: JSON.stringify({ detailLevel: detail, purpose }),
         signal: ctrl.signal,
       });
-      if (!res.ok || !res.body) {
-        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+      const data = (await res.json().catch(() => null)) as {
+        error?: string;
+        jobId?: string;
+        articleId?: string;
+      } | null;
+      if (!res.ok || !data?.articleId) {
         setRequestId(res.headers.get("x-request-id"));
         setError(data?.error ?? `生成失败（${res.status}）`);
         petFlow.failed();
         return;
       }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split("\n\n");
-        buffer = blocks.pop() ?? "";
-        for (const block of blocks) {
-          const event = /^event: (.+)$/m.exec(block)?.[1];
-          const dataLine = /^data: (.+)$/m.exec(block)?.[1];
-          if (!event || !dataLine) continue;
-          const data = JSON.parse(dataLine) as Record<string, unknown>;
-          if (event === "progress") {
-            const message = data.message ? ` ${data.message}` : "";
-            setStage(`${data.stage === "outline" ? "生成提纲" : "撰写章节"}${message}`);
-          } else if (event === "delta") {
-            setStreamText((cur) => cur + String(data.delta ?? ""));
-          } else if (event === "done") {
-            setStage(null);
-            petFlow.done();
-            await load();
-            setSelected(String((data as { id?: string }).id ?? ""));
-          } else if (event === "error") {
-            petFlow.failed();
-            const problems = Array.isArray(data.problems) ? (data.problems as Array<{ field: string; message: string }>) : [];
-            setRequestId(
-              typeof data.request_id === "string"
-                ? data.request_id
-                : res.headers.get("x-request-id"),
-            );
-            setError(
-              problems.length > 0
-                ? `${String(data.message)}：${problems.map((p) => p.message).join("；")}`
-                : String(data.message ?? "生成失败"),
-            );
-          }
-        }
-      }
+      await subscribe(data.articleId, ctrl);
     } catch (err) {
-      if (ctrl.signal.aborted) return; // 卸载/中断不算失败，不发桌宠信号
+      if (ctrl.signal.aborted) return;
+      setError(err instanceof Error ? err.message : String(err));
+      petFlow.failed();
+    } finally {
+      if (abortRef.current === ctrl) abortRef.current = null;
+      setBusy(false);
+      setStage(null);
+    }
+  };
+
+  const cancelGeneration = async (articleId: string) => {
+    await fetch(`/api/tasks/${taskId}/articles/${articleId}/cancel`, { method: "POST" });
+    abortRef.current?.abort();
+    setBusy(false);
+    setStage(null);
+    await load();
+  };
+
+  const resumeGeneration = async (articleId: string) => {
+    setBusy(true);
+    setError(null);
+    setStreamText("");
+    setStage("继续生成");
+    petFlow.working();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/articles/${articleId}/resume`, { method: "POST" });
+      const data = (await res.json().catch(() => null)) as { error?: string; articleId?: string } | null;
+      if (!res.ok || !data?.articleId) {
+        setError(data?.error ?? `继续生成失败（${res.status}）`);
+        petFlow.failed();
+        return;
+      }
+      await subscribe(data.articleId, ctrl);
+    } catch (err) {
+      if (ctrl.signal.aborted) return;
       setError(err instanceof Error ? err.message : String(err));
       petFlow.failed();
     } finally {
@@ -315,6 +376,16 @@ export function ArticlePanel({
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
               <button
                 type="button"
+                onClick={() => setShareOpen(true)}
+                disabled={active.status !== "done"}
+                className="inline-flex items-center gap-1 font-mono text-[10px] text-paper-faint transition-colors hover:text-gold disabled:opacity-50"
+                title="创建只读分享链接"
+              >
+                <Link2 className="size-3" strokeWidth={1.5} />
+                分享
+              </button>
+              <button
+                type="button"
                 onClick={() => void exportPdf()}
                 disabled={exporting !== null}
                 className="inline-flex items-center gap-1 rounded-lg border border-gold/40 bg-gold/10 px-2 py-1 font-mono text-[10px] text-gold transition-colors hover:bg-gold/20 disabled:opacity-50"
@@ -406,6 +477,28 @@ export function ArticlePanel({
           {busy ? "生成中" : articles.some((a) => a.status === "done") ? "重新生成" : "生成图文文章"}
         </button>
 
+        {busy && active ? (
+          <button
+            type="button"
+            onClick={() => void cancelGeneration(active.id)}
+            className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-xl border border-danger/30 bg-danger/5 px-3 py-1.5 font-mono text-[10px] tracking-wider text-danger/80 transition-colors hover:bg-danger/15"
+          >
+            <X className="size-3" strokeWidth={1.5} />
+            取消生成
+          </button>
+        ) : null}
+
+        {!busy && active && (active.status === "interrupted" || active.status === "failed") && active.content ? (
+          <button
+            type="button"
+            onClick={() => void resumeGeneration(active.id)}
+            className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-xl border border-gold/40 bg-gold/10 px-3 py-1.5 font-mono text-[10px] tracking-wider text-gold transition-colors hover:bg-gold/20"
+          >
+            <RotateCcw className="size-3" strokeWidth={1.5} />
+            已保存 {active.content.sections.length} 章 · 继续生成
+          </button>
+        ) : null}
+
         {stage ? (
           <p className="mt-2 truncate font-mono text-[10px] text-gold/80">{stage}</p>
         ) : null}
@@ -427,7 +520,45 @@ export function ArticlePanel({
       ) : null}
 
       {active?.content ? (
-        <div className="glass min-h-0 flex-1 overflow-auto rounded-2xl p-6">
+        <ReviewSidebar
+          taskId={taskId}
+          articleId={active.id}
+          articleReady={active.status === "done"}
+          scrollRef={articleScrollRef}
+        />
+      ) : null}
+
+      {active?.content ? (
+        <div
+          ref={contentRef}
+          className="glass relative min-h-0 flex-1 overflow-auto rounded-2xl p-6"
+        >
+          {onAskSection ? (
+            <SelectionPopover
+              containerRef={contentRef}
+              onAsk={(quote) => {
+                // 用选区起点反查所属章节与块：向上找最近的 section 根，
+                // 途中经过块包装 div（data-block-index）时记下块序号
+                const sel = window.getSelection();
+                let el: Node | null = sel?.rangeCount
+                  ? sel.getRangeAt(0).startContainer
+                  : null;
+                let blockIndex = -1;
+                while (el) {
+                  if (el instanceof HTMLElement) {
+                    if (blockIndex < 0 && el.dataset.blockIndex !== undefined) {
+                      blockIndex = Number(el.dataset.blockIndex);
+                    }
+                    if (el.dataset.sectionId) break;
+                  }
+                  el = el.parentNode;
+                }
+                const host = el as HTMLElement | null;
+                if (!host?.dataset.sectionId) return;
+                onAskSection(host.dataset.sectionId, blockIndex, quote);
+              }}
+            />
+          ) : null}
           {/* 正文限宽：过宽的行长会让阅读跳行，正文区在宽屏下居中 */}
           <div className="mx-auto w-full max-w-[44rem]">
           {active.status === "streaming" ? (
@@ -443,22 +574,22 @@ export function ArticlePanel({
             {active.detailLevel === "concise" ? "速览" : active.detailLevel === "detailed" ? "深入" : "标准"}
             {" · "}
             {active.content.sections.length} 章
+            {/* 模型身份行（11 号票 S6）：历史文章 model 为默认值时不显示 */}
+            {active.model && active.model !== "glm-4.6" ? ` · ${active.model}` : ""}
             {active.purpose ? ` · 关注点：${active.purpose}` : ""}
           </p>
 
           {active.content.mindMap.length > 0 ? (
-            <div className="mt-5 rounded-xl border border-tint/5 bg-tint/[0.02] p-3">
-              <p className="mb-2 font-mono text-[10px] tracking-widest text-paper-faint">内容导图</p>
-              <MindMapTree
-                nodes={active.content.mindMap}
-                activeSection={null}
-                onJump={(sectionId) => {
-                  document
-                    .getElementById(`section-${sectionId}`)
-                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
-                }}
-              />
-            </div>
+            <MindOverview
+              nodes={active.content.mindMap}
+              title={active.content.title}
+              sectionIds={sectionIds}
+              activeSection={activeSection}
+              onJump={(sectionId) => {
+                const container = contentRef.current;
+                if (container) scrollToSection(container, sectionId);
+              }}
+            />
           ) : null}
 
           <div className="mt-6 space-y-9">
@@ -466,6 +597,7 @@ export function ArticlePanel({
               <section
                 key={section.id}
                 id={`section-${section.id}`}
+                data-section-id={section.id}
                 className={`scroll-mt-4 ${index > 0 ? "border-t border-tint/[0.07] pt-8" : ""}`}
               >
                 <h3 className="flex items-baseline gap-2.5 font-display text-[19px] font-semibold leading-snug text-paper">
@@ -476,13 +608,15 @@ export function ArticlePanel({
                 </h3>
                 <div className="mt-3 space-y-3.5">
                   {section.blocks.map((block, i) => (
-                    <ArticleBlockView
-                      key={i}
-                      taskId={taskId}
-                      block={block}
-                      times={citationTimes}
-                      onSeek={seek}
-                    />
+                    <div key={i} data-block-index={i} data-block-type={block.type}>
+                      <ArticleBlockView
+                        taskId={taskId}
+                        block={block}
+                        times={citationTimes}
+                        onSeek={seek}
+                        onAskFrame={onAskFrame}
+                      />
+                    </div>
                   ))}
                 </div>
               </section>
@@ -551,6 +685,14 @@ export function ArticlePanel({
             </p>
           ) : null}
         </div>
+      ) : null}
+
+      {shareOpen && active ? (
+        <ShareDialog
+          taskId={taskId}
+          articleId={active.id}
+          onClose={() => setShareOpen(false)}
+        />
       ) : null}
     </div>
   );

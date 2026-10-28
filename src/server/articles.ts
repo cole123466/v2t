@@ -3,9 +3,11 @@ import { getLlmConfig } from "./config";
 import type { Db } from "./db";
 import { bind, row as one, rows as many } from "./sql";
 import type { ActivityStore } from "./activities";
+import { checkCitations, citationRetryNote, knownCitationIds } from "@/lib/citations";
 import type { LLMMessage, LLMProvider } from "./generations";
 import { elapsedMs, errorFields, logError, logInfo, logWarn } from "./log";
 import {
+  blockText,
   looseJsonBody,
   normalizeArticle,
   validateBlocks,
@@ -16,8 +18,39 @@ import {
   type ArticleSection,
   type CitationCatalog,
 } from "./article";
+import {
+  annotateUnsupported,
+  collectVerifyPairs,
+  parseVerifyResults,
+  unverifiedLimitation,
+  verifyPrompt,
+  type VerifyPair,
+  type VerifyResult,
+} from "@/lib/semantic";
 
 export type ArticleDetailLevel = "concise" | "standard" | "detailed";
+
+/** 合法的深度取值（导入页与文章接口共用校验） */
+export const DETAIL_LEVELS: ArticleDetailLevel[] = ["concise", "standard", "detailed"];
+
+/**
+ * 归一化导入时选定的文章选项（深度 + 关注点），落库到 tasks 的默认两列。
+ * 非法深度或超长关注点返回 error；关注点空白归一为 null。
+ */
+export function normalizeArticleOptions(input: {
+  detailLevel?: unknown;
+  purpose?: unknown;
+}): { detailLevel: ArticleDetailLevel; purpose: string | null } | { error: string } {
+  const detailLevel = (input.detailLevel ?? "standard") as ArticleDetailLevel;
+  if (!DETAIL_LEVELS.includes(detailLevel)) {
+    return { error: "detailLevel 需为 concise / standard / detailed" };
+  }
+  const purpose = typeof input.purpose === "string" ? input.purpose.trim() : "";
+  if (purpose.length > 500) {
+    return { error: "关注点不能超过 500 字" };
+  }
+  return { detailLevel, purpose: purpose || null };
+}
 
 export interface ArticleRecord {
   id: string;
@@ -269,29 +302,117 @@ export interface GenerateArticleInput {
   purpose?: string | null;
   onProgress?: (event: { stage: string; message?: string }) => void;
   onDelta?: (delta: string) => void;
-  /** 客户端断开时中止后续章节的上游请求 */
+  /** 中止信号：08 号票后仅来自 worker（stop/cancel），不再接 HTTP 请求 */
   signal?: AbortSignal;
+}
+
+/** 08 号票：worker 执行入口的输入。runId 即 jobId（命名修正：执行就是 job） */
+export interface RunForJobInput {
+  taskId: string;
+  traceId?: string;
+  catalog: CitationCatalog;
+  frameFiles: Map<string, string>;
+  /** 目标文章行（创建时即确定） */
+  articleId: string;
+  /** run/job id：步骤都挂在这个 id 下 */
+  runId: string;
+  /** resume 输入：旧 job 的提纲 + 已存章节（跳过不重生成） */
+  resume?: { outline: ArticleDraftOutline; existingSections: ArticleSection[] };
+  signal?: AbortSignal;
+  onProgress?: (event: { stage: string; message?: string }) => void;
+  onDelta?: (delta: string) => void;
+  hooks?: {
+    onOutline?: (outline: ArticleDraftOutline) => void;
+    onSectionDone?: (done: number, total: number) => void;
+    onPhase?: (phase: string) => void;
+    onSectionVerified?: (index: number, message: string) => void;
+  };
+}
+
+interface PipelineInput {
+  taskId: string;
+  traceId?: string;
+  catalog: CitationCatalog;
+  frameFiles: Map<string, string>;
+  detail: ArticleDetailLevel;
+  purpose: string | null;
+  record: ArticleRecord;
+  runId: string | null;
+  signal?: AbortSignal;
+  resume?: { outline: ArticleDraftOutline; existingSections: ArticleSection[] };
+  /** resume 的降级交付：发布前校验失败不阻塞，文章置 done + error 摘要 */
+  downgradeOnValidateFail?: boolean;
+  onProgress?: (event: { stage: string; message?: string }) => void;
+  onDelta?: (delta: string) => void;
+  hooks?: RunForJobInput["hooks"];
 }
 
 export class ArticleService {
   constructor(private readonly opts: ArticleServiceOptions) {}
 
+  /** 同步生成（保留给测试与旧调用方；生产路径走 runForJob） */
   async generate(input: GenerateArticleInput): Promise<ArticleRecord> {
     const detail = input.detailLevel ?? "standard";
     const purpose = input.purpose?.trim() || null;
-    const startedAt = Date.now();
     const record = this.opts.store.create({
       taskId: input.taskId,
       detailLevel: detail,
       purpose,
       model: getLlmConfig().model,
     });
+    const runId = this.opts.activities?.newRunId() ?? null;
+    return this.runPipeline({
+      taskId: input.taskId,
+      traceId: input.traceId,
+      catalog: input.catalog,
+      frameFiles: input.frameFiles,
+      detail,
+      purpose,
+      record,
+      runId,
+      signal: input.signal,
+      onProgress: input.onProgress,
+      onDelta: input.onDelta,
+    });
+  }
+
+  /**
+   * 08 号票：后台执行入口。文章行已存在（创建时即建），本方法负责提纲/章节/发布；
+   * resume 时跳过已存章节，只补齐缺失部分。
+   */
+  async runForJob(input: RunForJobInput): Promise<ArticleRecord> {
+    const record = this.opts.store.get(input.articleId);
+    if (!record) throw new Error("文章记录不存在");
+    return this.runPipeline({
+      taskId: input.taskId,
+      traceId: input.traceId,
+      catalog: input.catalog,
+      frameFiles: input.frameFiles,
+      detail: record.detailLevel,
+      purpose: record.purpose,
+      record,
+      runId: input.runId,
+      signal: input.signal,
+      resume: input.resume,
+      downgradeOnValidateFail: Boolean(input.resume),
+      onProgress: input.onProgress,
+      onDelta: input.onDelta,
+      hooks: input.hooks,
+    });
+  }
+
+  private async runPipeline(input: PipelineInput): Promise<ArticleRecord> {
+    const detail = input.detail;
+    const purpose = input.purpose;
+    const record = input.record;
+    const startedAt = Date.now();
     logInfo("article generation started", {
       task_id: input.taskId,
       trace_id: input.traceId,
       article_id: record.id,
       detail,
       has_purpose: purpose !== null,
+      resume: Boolean(input.resume),
       frames: input.catalog.frames.length,
       segments: input.catalog.transcripts.length,
     });
@@ -307,44 +428,62 @@ export class ArticleService {
       this.opts.store.update(record.id, { model: used });
     };
 
-    const runId = this.opts.activities?.newRunId() ?? null;
-    // 记录当前 run 里最后一批 section 步骤 id，便于每章完成时置状态
+    const runId = input.runId;
     const sectionStepIds: string[] = [];
     const steps = this.opts.activities;
-    const outlineStep = steps?.start({
-      taskId: input.taskId,
-      kind: "stage",
-      runId,
-      phase: "outline",
-      title: "生成提纲",
-      articleId: record.id,
-    });
+    let outlineStep = null as ReturnType<NonNullable<typeof steps>["start"]> | null;
+    if (!input.resume) {
+      outlineStep =
+        steps?.start({
+          taskId: input.taskId,
+          kind: "stage",
+          runId,
+          phase: "outline",
+          title: "生成提纲",
+          articleId: record.id,
+        }) ?? null;
+    }
     input.onProgress?.({ stage: "outline" });
 
     try {
-      // 第一步：提纲
-      const outlineAt = Date.now();
-      const outlineRaw = await this.opts.llm.generate(
-        [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: outlinePrompt(input.catalog, detail, purpose) },
-        ],
-        () => {},
-        {
-          operation: "article.outline",
-          taskId: input.taskId,
-          traceId: input.traceId,
-          signal: input.signal,
-          onModel,
-        },
-      );
-      const outline = this.parseOutline(outlineRaw);
-      this.opts.store.update(record.id, { outline, title: outline.title });
-      steps?.finish(outlineStep!.id, {
-        ok: true,
-        status: "completed",
-        message: `${outline.sections.length} 章`,
-      });
+      // 第一步：提纲（resume 时直接复用）
+      let outline: ArticleDraftOutline;
+      if (input.resume) {
+        outline = input.resume.outline;
+        input.hooks?.onOutline?.(outline);
+      } else {
+        const outlineAt = Date.now();
+        const outlineRaw = await this.opts.llm.generate(
+          [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: outlinePrompt(input.catalog, detail, purpose) },
+          ],
+          () => {},
+          {
+            operation: "article.outline",
+            taskId: input.taskId,
+            traceId: input.traceId,
+            signal: input.signal,
+            onModel,
+          },
+        );
+        outline = this.parseOutline(outlineRaw);
+        this.opts.store.update(record.id, { outline, title: outline.title });
+        steps?.finish(outlineStep!.id, {
+          ok: true,
+          status: "completed",
+          message: `${outline.sections.length} 章`,
+        });
+        input.hooks?.onOutline?.(outline);
+        logInfo("article outline ready", {
+          task_id: input.taskId,
+          trace_id: input.traceId,
+          article_id: record.id,
+          sections: outline.sections.length,
+          duration_ms: elapsedMs(outlineAt),
+        });
+      }
+
       // 计划即步骤集合：预插入 N 条 queued 章节步骤（D4：不落库计划快照）
       const planAt = new Date().toISOString();
       sectionStepIds.length = 0;
@@ -363,25 +502,45 @@ export class ArticleService {
           sectionStepIds.push(step.id);
         }
       }
-      logInfo("article outline ready", {
-        task_id: input.taskId,
-        trace_id: input.traceId,
-        article_id: record.id,
-        sections: outline.sections.length,
-        duration_ms: elapsedMs(outlineAt),
-      });
 
-      // 第二步：逐章生成（每章一次调用，带该章相关画面）
+      // 引用白名单：一次构造、多处复用（15 号票 C2/C3）
+      const knownCitations = knownCitationIds(
+        input.catalog.allowTimeCitations ? input.catalog.transcripts.map((t) => t.id) : [],
+        input.catalog.frames.map((f) => f.id),
+      );
+      const knownExample =
+        input.catalog.transcripts.length > 0
+          ? `[[t01]]…[[t${String(input.catalog.transcripts.length).padStart(2, "0")}]]` +
+            (input.catalog.frames.length > 0
+              ? ` 与 [[f00]]…[[f${String(input.catalog.frames.length - 1).padStart(2, "0")}]]`
+              : "")
+          : "（本任务没有可用编号，正文不要写引用标记）";
+
+      // 第二步：逐章生成（每章一次调用，带该章相关画面）；resume 跳过已存章节
+      const existing = new Map((input.resume?.existingSections ?? []).map((s) => [s.id, s]));
       const sections = [] as Article["sections"];
+      // 语义核对产生的未支持条目（C6）：随最终 limitations 一起落库
+      const verifyLimitations: Article["limitations"] = [];
+      let doneCount = 0;
       for (let i = 0; i < outline.sections.length; i++) {
-        if (input.signal?.aborted) throw new Error("客户端已断开，文章生成已中止");
+        if (input.signal?.aborted) throw new Error("生成已中止");
         const section = outline.sections[i];
         const sectionStepId = sectionStepIds[i];
+        const kept = existing.get(section.id);
+        if (kept) {
+          // 已存章节不重新生成、不重新校验（避免旧内容因规则变化而卡死）
+          sections.push(kept);
+          doneCount += 1;
+          steps?.updateStatus(sectionStepId, "completed", "已保存，跳过");
+          input.hooks?.onSectionDone?.(doneCount, outline.sections.length);
+          continue;
+        }
         steps?.updateStatus(sectionStepId, "running");
         input.onProgress?.({
           stage: "section",
           message: `${i + 1}/${outline.sections.length} ${section.title}`,
         });
+        input.hooks?.onPhase?.("write");
         const sectionAt = Date.now();
         const images = await this.pickSectionFrames(
           i,
@@ -414,8 +573,15 @@ export class ArticleService {
               : lastError
                 ? "上一次输出不是合法的 JSON。请只输出一个 JSON 对象，不要任何解释、不要 Markdown 围栏；" +
                   "正文里不要出现英文双引号（改用中文引号「」），总长度控制在 1200 字以内。"
-                : `上一次输出的块字段不合规：${blockProblems.join("；")}。` +
-                  "请严格按上面的块类型与配额输出，只输出 JSON。";
+                : blockProblems.some((p) => p.includes("引用") && p.includes("不存在"))
+                  ? citationRetryNote(
+                      blockProblems
+                        .map((p) => /引用 (t\d+|f\d+) 不存在/.exec(p)?.[1])
+                        .filter((x): x is string => Boolean(x)),
+                      knownExample,
+                    ) + "请只输出 JSON。"
+                  : `上一次输出的块字段不合规：${blockProblems.join("；")}。` +
+                    "请严格按上面的块类型与配额输出，只输出 JSON。";
           const messages: LLMMessage[] =
             attempt === 0
               ? [
@@ -449,8 +615,13 @@ export class ArticleService {
               limitations: [],
             });
             const issues = validateBlocks(normalized, input.catalog);
-            if (issues.length > 0) {
-              blockProblems = issues.slice(0, 5).map((p) => p.message);
+            // 15 号票 C1：章内引用白名单校验（strict），与块校验共用同一 attempt<2 预算
+            const sectionText = normalized.sections[0].blocks.map((b) => blockText(b)).join(" ");
+            const citationCheck = checkCitations(sectionText, knownCitations);
+            const citationProblems = citationCheck.invalid.map((t) => `时间/画面引用 ${t} 不存在`);
+            const allProblems = [...issues.map((p) => p.message), ...citationProblems];
+            if (allProblems.length > 0) {
+              blockProblems = allProblems.slice(0, 5);
               lastError = null;
               parsed = null;
               logWarn("article section retry", {
@@ -459,7 +630,7 @@ export class ArticleService {
                 article_id: record.id,
                 section: section.id,
                 attempt: attempt + 1,
-                reason: "invalid_blocks",
+                reason: citationProblems.length > 0 ? "invalid_citations" : "invalid_blocks",
                 problems: blockProblems.length,
               });
               continue;
@@ -489,6 +660,7 @@ export class ArticleService {
           title: parsed.title?.trim() || section.title,
           blocks: parsedBlocks,
         });
+        doneCount += 1;
         // 章节增量落库：content 与步骤 completed 必须相邻落库（同一同步块内），
         // 保证「步骤 completed ⇒ 内容已可读」（07 号票验收 2/3 的前提）
         this.opts.store.update(record.id, {
@@ -501,6 +673,7 @@ export class ArticleService {
           status: "streaming",
         });
         steps?.updateStatus(sectionStepId, "completed");
+        input.hooks?.onSectionDone?.(doneCount, outline.sections.length);
         logInfo("article section ready", {
           task_id: input.taskId,
           trace_id: input.traceId,
@@ -512,14 +685,132 @@ export class ArticleService {
           images: images.length,
           duration_ms: elapsedMs(sectionAt),
         });
+
+        // ---- 15 号票后半（C4/C6/C7）：语义核对 ----
+        // 定位：质量增强，不是发布门禁。核对环节任何失败（LLM 报错、输出不合规）
+        // 都只记 failed 步骤，绝不让章节或文章失败——不能因核对丢内容。
+        const verifyAt = Date.now();
+        const verifyStep =
+          steps?.start({
+            taskId: input.taskId,
+            kind: "verify",
+            runId,
+            phase: "write",
+            title: `核对第 ${i + 1} 章引用`,
+            articleId: record.id,
+          }) ?? null;
+        let verifyNote = "本章没有需要核对的引用";
+        try {
+          const outcome = await this.verifySection({
+            blocks: parsedBlocks,
+            catalog: input.catalog,
+            signal: input.signal,
+            onModel,
+            // 重写该章一次（C6）：让模型改写论断或换更贴切的引用
+            onUnsupported: async (failed) => {
+              const rewriteNote =
+                `第 ${failed.map((r) => r.index + 1).join("、")} 处引用未能支持论断，` +
+                "请改写论断或换用更贴切的引用编号；只输出 JSON（与之前相同的章节结构）。";
+              const raw = await this.opts.llm.generate(
+                [
+                  { role: "system", content: prompt.system },
+                  { role: "user", content: prompt.user },
+                  { role: "user", content: rewriteNote },
+                ],
+                () => {},
+                {
+                  operation: "article.verify-rewrite",
+                  taskId: input.taskId,
+                  traceId: input.traceId,
+                  signal: input.signal,
+                  onModel,
+                },
+              );
+              const rewritten = JSON.parse(looseJsonBody(raw)) as { blocks?: unknown[] };
+              const normalized = normalizeArticle({
+                title: outline.title,
+                sections: [
+                  {
+                    id: section.id,
+                    title: parsed!.title?.trim() || section.title,
+                    blocks: rewritten.blocks ?? [],
+                  },
+                ],
+                mindMap: [],
+                limitations: [],
+              });
+              // 重写没有产出可用正文（缺 blocks 字段 / 空数组）时按核对失败处理，
+              // 调用方 catch 后保留原章节——绝不让重写把整章清空
+              if (normalized.sections[0].blocks.length === 0) {
+                throw new Error("重写结果没有正文内容");
+              }
+              return normalized.sections[0].blocks;
+            },
+          });
+          if (outcome.unsupported.length > 0) {
+            // 重写仍不过 → 保留正文，内联标注 + limitations（C6 底线：绝不丢内容）
+            const marked = annotateUnsupported(
+              outcome.blocks,
+              outcome.unsupported.map((u) => u.token),
+            );
+            sections[sections.length - 1] = {
+              id: section.id,
+              title: parsed.title?.trim() || section.title,
+              blocks: marked.blocks,
+            };
+            verifyLimitations.push(
+              ...outcome.unsupported.map((u): Article["limitations"][number] => ({
+                text: unverifiedLimitation(i + 1, u.claim),
+              })),
+            );
+            verifyNote = `已保留正文并标注：${outcome.note}`;
+          } else if (outcome.blocks !== parsedBlocks) {
+            // 重写通过 → 用重写后的正文替换原章节
+            sections[sections.length - 1] = {
+              id: section.id,
+              title: parsed.title?.trim() || section.title,
+              blocks: outcome.blocks,
+            };
+            verifyNote = outcome.note;
+          } else {
+            verifyNote = outcome.note;
+          }
+          steps?.finish(verifyStep!.id, { ok: true, status: "completed", message: verifyNote });
+        } catch (err) {
+          // 核对本身失败不中止整篇（质量增强非门禁），步骤记 failed
+          steps?.finish(verifyStep!.id, {
+            ok: false,
+            status: "failed",
+            message: err instanceof Error ? err.message.slice(0, 200) : "核对失败",
+          });
+          logWarn("article section verify failed; continuing", {
+            task_id: input.taskId,
+            trace_id: input.traceId,
+            article_id: record.id,
+            section: section.id,
+            ...errorFields(err),
+            duration_ms: elapsedMs(verifyAt),
+          });
+          verifyNote = "核对未完成（不影响文章）";
+        }
+        input.hooks?.onSectionVerified?.(i + 1, verifyNote);
+        logInfo("article section verified", {
+          task_id: input.taskId,
+          trace_id: input.traceId,
+          article_id: record.id,
+          section: section.id,
+          message: verifyNote,
+          duration_ms: elapsedMs(verifyAt),
+        });
       }
 
       const article = normalizeArticle({
         title: outline.title,
         sections,
         mindMap: outline.mindMap,
-        limitations: [],
+        limitations: verifyLimitations,
       });
+      input.hooks?.onPhase?.("validate");
       const validateStep = steps?.start({
         taskId: input.taskId,
         kind: "stage",
@@ -538,10 +829,31 @@ export class ArticleService {
           .slice(0, 8)
           .map((p) => p.message)
           .join("；")}`;
+        if (input.downgradeOnValidateFail) {
+          // resume 降级交付：已存章节不重校，失败只记录不阻塞（08 号票）
+          steps?.finish(validateStep!.id, { ok: false, status: "failed", message: msg.slice(0, 200) });
+          const publishStep = steps?.start({
+            taskId: input.taskId,
+            kind: "stage",
+            runId,
+            phase: "publish",
+            title: "发布文章",
+            articleId: record.id,
+          });
+          this.opts.store.update(record.id, {
+            content: article,
+            status: "done",
+            title: article.title,
+            error: `部分引用未通过校验：${problems.slice(0, 3).map((p) => p.message).join("；")}`,
+          });
+          steps?.finish(publishStep!.id, { ok: true, status: "completed" });
+          return { ...record, outline, content: article, status: "done", title: article.title };
+        }
         steps?.finish(validateStep!.id, { ok: false, status: "failed", message: msg.slice(0, 200) });
         throw new Error(msg);
       }
       steps?.finish(validateStep!.id, { ok: true, status: "completed" });
+      input.hooks?.onPhase?.("publish");
       const publishStep = steps?.start({
         taskId: input.taskId,
         kind: "stage",
@@ -550,7 +862,7 @@ export class ArticleService {
         title: "发布文章",
         articleId: record.id,
       });
-      this.opts.store.update(record.id, { content: article, status: "done", title: article.title });
+      this.opts.store.update(record.id, { content: article, status: "done", title: article.title, error: null });
       steps?.finish(publishStep!.id, { ok: true, status: "completed" });
       logInfo("article generation completed", {
         task_id: input.taskId,
@@ -563,11 +875,9 @@ export class ArticleService {
       return { ...record, outline, content: article, status: "done", title: article.title };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // 步骤终态回写：客户端断开 → 当前步骤 canceled；其余失败 → failed
+      // 步骤终态回写：中止 → 当前步骤 canceled；其余失败 → failed
       const aborted = input.signal?.aborted === true || message.includes("已中止");
-      const runningIds = steps
-        ? this.runningStepIds(runId)
-        : [];
+      const runningIds = steps ? this.runningStepIds(runId) : [];
       for (const sid of runningIds) {
         steps!.updateStatus(sid, aborted ? "canceled" : "failed", aborted ? "生成已中断" : message.slice(0, 200));
       }
@@ -579,8 +889,8 @@ export class ArticleService {
         });
       }
       this.opts.store.update(record.id, {
-        status: "failed",
-        error: aborted ? "生成已中断，可重新生成" : message,
+        status: aborted ? "interrupted" : "failed",
+        error: aborted ? "生成已中断，可继续生成" : message,
       });
       logError("article generation failed", {
         task_id: input.taskId,
@@ -597,6 +907,95 @@ export class ArticleService {
   private runningStepIds(runId: string | null): string[] {
     if (!runId || !this.opts.activities) return [];
     return this.opts.activities.runningIdsForRun(runId);
+  }
+
+  /**
+   * 15 号票 C4：语义核对一章。整章所有「句子 ↔ 引用」成对列出，一次调用批量判定。
+   * unsupported → 重写该章一次（C6）；重写仍不过 → 保留正文，返回未支持编号由调用方标注。
+   * partial 视为通过，数量汇入步骤 message（限制说明候选池）。
+   */
+  private async verifySection(input: {
+    blocks: ArticleSection["blocks"];
+    catalog: CitationCatalog;
+    signal?: AbortSignal;
+    onModel: (model: string) => void;
+    onUnsupported: (failed: VerifyResult[]) => Promise<ArticleSection["blocks"]>;
+  }): Promise<{
+    note: string;
+    /** 未支持的「编号 ↔ 论断」对（基于重写后正文重新抽取，标注与 limitation 用） */
+    unsupported: VerifyPair[];
+    blocks: ArticleSection["blocks"];
+  }> {
+    const pairs = collectVerifyPairs({ blocks: input.blocks }, input.catalog);
+    if (pairs.length === 0) {
+      return { note: "本章没有需要核对的引用", unsupported: [], blocks: input.blocks };
+    }
+    const judge = async (currentBlocks: ArticleSection["blocks"]): Promise<VerifyResult[]> => {
+      const currentPairs = collectVerifyPairs({ blocks: currentBlocks }, input.catalog);
+      const raw = await this.opts.llm.generate(
+        [
+          {
+            role: "system",
+            content:
+              "你是严谨的事实核对员。只依据给定的原文判断论断是否被直接支持，不引入外部知识。输出严格 JSON。",
+          },
+          { role: "user", content: verifyPrompt(currentPairs) },
+        ],
+        () => {},
+        {
+          operation: "article.verify",
+          signal: input.signal,
+          onModel: input.onModel,
+        },
+      );
+      return parseVerifyResults(raw, currentPairs.length);
+    };
+
+    let results = await judge(input.blocks);
+    const failed = results.filter((r) => r.verdict === "unsupported");
+    if (failed.length === 0) {
+      const partial = results.filter((r) => r.verdict === "partial");
+      return {
+        note:
+          `${pairs.length} 处引用全部支持` +
+          (partial.length > 0 ? `（${partial.length} 处为部分支持）` : ""),
+        unsupported: [],
+        blocks: input.blocks,
+      };
+    }
+
+    // C6：重写该章一次
+    const rewrittenBlocks = await input.onUnsupported(failed);
+    // 未支持条目按重写后正文重新抽取：重写可能增删/替换引用编号，
+    // 不能拿原始 pairs 的索引去映射，否则会标注错位
+    const rewrittenPairs = collectVerifyPairs({ blocks: rewrittenBlocks }, input.catalog);
+    // 重写把引用删光 = 留下无出处的断言，比标注更糟（票15底线）。
+    // judge 对空配对恒判全绿（parseVerifyResults 按 count=0 返回空），
+    // 会把无引用版本当重写通过整章替换——此处拒绝重写，退回原文按首轮 failed 标注
+    if (rewrittenPairs.length === 0) {
+      return {
+        note: `${failed.length} 处未支持，重写删光了引用，已按原文标注`,
+        unsupported: pairs.filter((_, idx) => failed.some((r) => r.index === idx)),
+        blocks: input.blocks,
+      };
+    }
+    const retryResults = await judge(rewrittenBlocks);
+    const stillFailed = retryResults.filter((r) => r.verdict === "unsupported");
+    if (stillFailed.length === 0) {
+      const partial = retryResults.filter((r) => r.verdict === "partial");
+      return {
+        note: `${failed.length} 处未支持，已重写${partial.length > 0 ? `（${partial.length} 处为部分支持）` : ""}`,
+        unsupported: [],
+        blocks: rewrittenBlocks,
+      };
+    }
+    return {
+      note: `${stillFailed.length} 处未支持，已标注`,
+      unsupported: rewrittenPairs.filter((_, idx) =>
+        stillFailed.some((r) => r.index === idx),
+      ),
+      blocks: rewrittenBlocks,
+    };
   }
 
   /** 校验失败的成品也保留记录并抛出可读错误（由调用方决定是否重试） */

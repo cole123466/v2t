@@ -80,6 +80,7 @@ describe("SSE 错误事件携带 request_id", () => {
       store: { getOwned: () => ({ id: "task-1", status: "ready" }) },
       dataDir: "/tmp/v2t-test",
       activities: activities(),
+      qa: { lastTurn: () => [], hasInFlight: () => false, markInFlight: () => {}, markSettled: () => {} },
       qaService: {
         ask: async () => {
           throw new Error("模拟问答失败");
@@ -97,7 +98,11 @@ describe("SSE 错误事件携带 request_id", () => {
     );
 
     const event = errorEvent(await response.text());
-    expect(event).toMatchObject({ message: "模拟问答失败", request_id: REQUEST_ID });
+    // 失败轮的对外文案固定（内部细节只进日志），request_id 仍透出供排障对照
+    expect(event).toMatchObject({
+      message: "回答失败，请稍后重试或重新提问",
+      request_id: REQUEST_ID,
+    });
   });
 
   it("图文文章失败", async () => {

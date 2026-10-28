@@ -358,7 +358,11 @@ describe("块级校验", () => {
 });
 
 describe("两步生成（提纲 → 逐章）", () => {
-  /** 假 LLM：第一次调用回提纲，之后每次回一章；记录每次 messages */
+  /**
+   * 假 LLM：按 prompt 特征分流（提纲 / 核对 / 章节），不再按调用序号——
+   * 15 号票后每章多出语义核对调用，序号索引会把核对当成章节。
+   * 记录每次 messages 供 prompt 断言。
+   */
   function fakeLlm(overrides?: { outline?: unknown; section?: unknown }): LLMProvider & {
     calls: LLMMessage[][];
   } {
@@ -367,7 +371,11 @@ describe("两步生成（提纲 → 逐章）", () => {
       calls,
       async generate(messages, onChunk) {
         calls.push(messages);
-        if (calls.length === 1) {
+        const text = JSON.stringify(messages);
+        if (text.includes("核对员")) {
+          return JSON.stringify({ results: [{ i: 0, verdict: "supported", reason: "" }] });
+        }
+        if (text.includes("设计一篇图文文章的提纲")) {
           onChunk("提纲");
           return JSON.stringify(
             overrides?.outline ?? {
@@ -407,7 +415,8 @@ describe("两步生成（提纲 → 逐章）", () => {
       onProgress: (e) => stages.push(e.stage),
     });
 
-    expect(llm.calls).toHaveLength(3); // 1 提纲 + 2 章
+    // 1 提纲 + 2 章 + 2 次语义核对（每章 1 次，15 号票后半）
+    expect(llm.calls).toHaveLength(5);
     expect(stages).toEqual(["outline", "section", "section"]);
     expect(record.status).toBe("done");
     expect(record.content?.sections).toHaveLength(2);
@@ -444,10 +453,15 @@ describe("两步生成（提纲 → 逐章）", () => {
         ],
       },
     ];
+    let callSections = 0;
     const llm: LLMProvider = {
       async generate(messages, onChunk) {
         calls.push(messages);
-        if (calls.length === 1) {
+        const text = JSON.stringify(messages);
+        if (text.includes("核对员")) {
+          return JSON.stringify({ results: [{ i: 0, verdict: "supported", reason: "" }] });
+        }
+        if (text.includes("设计一篇图文文章的提纲")) {
           onChunk("提纲");
           return JSON.stringify({
             title: "结构化文章",
@@ -459,7 +473,8 @@ describe("两步生成（提纲 → 逐章）", () => {
           });
         }
         onChunk("章节");
-        return JSON.stringify(sections[calls.length - 2] ?? sections[0]);
+        const section = sections[callSections++] ?? sections[0];
+        return JSON.stringify(section);
       },
     };
     const svc = new ArticleService({ store, llm });
@@ -484,11 +499,22 @@ describe("两步生成（提纲 → 逐章）", () => {
     const llm: LLMProvider = {
       async generate(messages) {
         calls.push(messages);
-        if (calls.length === 1) {
+        const text = JSON.stringify(messages);
+        if (text.includes("核对员")) {
+          return JSON.stringify({ results: [{ i: 0, verdict: "supported", reason: "" }] });
+        }
+        if (text.includes("设计一篇图文文章的提纲")) {
           return JSON.stringify({
             title: "重试文章",
             sections: [{ id: "s1", title: "第一章", summary: "要点" }],
             mindMap: [],
+          });
+        }
+        if (text.includes("未能支持论断")) {
+          return JSON.stringify({
+            id: "s1",
+            title: "第一章",
+            blocks: [{ type: "paragraph", text: "修正后的正文 [[t01]]" }],
           });
         }
         if (calls.length === 2) {
@@ -513,7 +539,7 @@ describe("两步生成（提纲 → 逐章）", () => {
     });
 
     expect(record.status).toBe("done");
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4); // 1 提纲 + 2 章节尝试 + 1 核对
     const retryPrompt = String(calls[2][2]?.content);
     expect(retryPrompt).toContain("块字段不合规");
   });

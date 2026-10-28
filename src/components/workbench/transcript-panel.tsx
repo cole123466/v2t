@@ -5,6 +5,7 @@ import { Check, Copy, Download } from "lucide-react";
 import type { Transcript } from "@/server/asr";
 import { toSrt } from "@/lib/srt";
 import { clock } from "@/lib/time";
+import { SelectionPopover } from "./selection-popover";
 
 export function TranscriptPanel({
   transcript,
@@ -12,14 +13,18 @@ export function TranscriptPanel({
   activeIndex,
   taskName,
   onSeek,
+  onAskSegment,
 }: {
   transcript: Transcript;
   videoRef: RefObject<HTMLVideoElement | null>;
   activeIndex: number;
   taskName: string;
   onSeek: (t: number) => void;
+  /** 文稿选段追问（09 号票 P1）：拖选出现浮层；单击仍是跳播 */
+  onAskSegment?: (segmentIndex: number, quote: string) => void;
 }) {
   const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -90,7 +95,23 @@ export function TranscriptPanel({
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
+      <div ref={scrollRef} className="relative min-h-0 flex-1 overflow-y-auto px-2 py-3">
+        {onAskSegment ? (
+          <SelectionPopover
+            containerRef={scrollRef}
+            onAsk={(quote) => {
+              // 从选区起点反查所属转写段
+              const sel = window.getSelection();
+              let el: Node | null = sel?.rangeCount ? sel.getRangeAt(0).startContainer : null;
+              while (el && !(el instanceof HTMLElement && el.dataset.segmentIndex)) {
+                el = el.parentNode;
+              }
+              const host = el as HTMLElement | null;
+              if (!host) return;
+              onAskSegment(Number(host.dataset.segmentIndex), quote);
+            }}
+          />
+        ) : null}
         {transcript.segments.map((seg, i) => {
           const active = i === activeIndex;
           return (
@@ -100,7 +121,10 @@ export function TranscriptPanel({
                 rowRefs.current[i] = el;
               }}
               type="button"
+              data-segment-index={i}
               onClick={() => {
+                // 拖选提问（非折叠选区）不触发跳播，两种语义互斥
+                if (window.getSelection() && !window.getSelection()!.isCollapsed) return;
                 const video = videoRef.current;
                 if (video) video.currentTime = seg.start;
                 onSeek(seg.start);

@@ -20,6 +20,7 @@ export const STATUS_META: Record<TaskStatus, { label: string; cls: string; dot: 
   },
   ready: { label: STATUS_LABEL.ready, cls: "text-positive/90", dot: "bg-positive/90" },
   failed: { label: STATUS_LABEL.failed, cls: "text-danger/90", dot: "bg-danger/90" },
+  canceled: { label: STATUS_LABEL.canceled, cls: "text-paper-faint", dot: "bg-paper-faint" },
 };
 
 export function timeAgo(iso: string) {
