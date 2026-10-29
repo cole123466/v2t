@@ -280,7 +280,7 @@ export function ArticlePanel({
       abortRef.current?.abort();
       setBusy(false);
       setStage(null);
-      await load();
+      await load().catch(() => {});
     }
   };
 
