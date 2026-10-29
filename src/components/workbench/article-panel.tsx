@@ -8,6 +8,7 @@ import {
   FileText,
   Link2,
   Loader,
+  Maximize2,
   Printer,
   RotateCcw,
   X,
@@ -65,6 +66,8 @@ export function ArticlePanel({
   const [shareOpen, setShareOpen] = useState(false);
   // 阅读模式的导出下拉菜单开关
   const [exportMenu, setExportMenu] = useState(false);
+  // 全屏导图弹层（票 B）
+  const [mapFullOpen, setMapFullOpen] = useState(false);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
   const abortRef = useRef<AbortController | null>(null);
   // 审稿旁栏「查看对应章节」的容器内定位句柄
@@ -73,6 +76,16 @@ export function ArticlePanel({
   useEffect(() => {
     return () => abortRef.current?.abort();
   }, []);
+
+  // 全屏导图：ESC 关闭
+  useEffect(() => {
+    if (!mapFullOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMapFullOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mapFullOpen]);
 
   // 刷新恢复：挂载时若有进行中的文章，重新订阅其事件流（08 号票）
   useEffect(() => {
@@ -387,8 +400,8 @@ export function ArticlePanel({
     }
   };
 
-  return (
-    <div className="flex h-full min-h-[420px] flex-col gap-4">
+  const body = (
+    <>
       {readerMode ? (
         /* 阅读模式（票 A）：驾驶舱收成细工具条，深度/关注点回工作台调 */
         <>
@@ -399,6 +412,17 @@ export function ArticlePanel({
               {stage ? <span className="truncate text-gold/80">· {stage}</span> : null}
             </p>
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              {busy && !active?.content ? (
+                <button
+                  type="button"
+                  onClick={() => void cancelGeneration(articles.find((a) => a.status === "streaming")?.id ?? active?.id ?? null)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-danger/30 px-2 py-1 font-mono text-[10px] text-danger/80 transition-colors hover:bg-danger/15"
+                  title="取消本次生成"
+                >
+                  <X className="size-3" strokeWidth={1.5} />
+                  取消
+                </button>
+              ) : null}
               {active?.content ? (
                 <>
                   <button
@@ -730,16 +754,29 @@ export function ArticlePanel({
           </p>
 
           {active.content.mindMap.length > 0 ? (
-            <MindOverview
-              nodes={active.content.mindMap}
-              title={active.content.title}
-              sectionIds={sectionIds}
-              activeSection={activeSection}
-              onJump={(sectionId) => {
-                const container = contentRef.current;
-                if (container) scrollToSection(container, sectionId);
-              }}
-            />
+            <div className="relative">
+              <MindOverview
+                nodes={active.content.mindMap}
+                title={active.content.title}
+                sectionIds={sectionIds}
+                activeSection={activeSection}
+                onJump={(sectionId) => {
+                  const container = contentRef.current;
+                  if (container) scrollToSection(container, sectionId);
+                }}
+              />
+              {readerMode ? (
+                <button
+                  type="button"
+                  onClick={() => setMapFullOpen(true)}
+                  className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-lg border border-tint/10 bg-ink-950/70 px-2 py-1 font-mono text-[10px] text-paper-faint transition-colors hover:border-gold/40 hover:text-gold"
+                  title="全屏查看内容导图"
+                >
+                  <Maximize2 className="size-3" strokeWidth={1.5} />
+                  全屏
+                </button>
+              ) : null}
+            </div>
           ) : null}
 
           <div className="mt-6 space-y-9">
@@ -850,6 +887,41 @@ export function ArticlePanel({
         </div>
       ) : null}
 
+      {mapFullOpen && active?.content ? (
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-ink-950/95 p-4 sm:p-8"
+          role="dialog"
+          aria-label="内容导图全屏"
+        >
+          <div className="flex items-center justify-between pb-3">
+            <p className="min-w-0 truncate font-mono text-[10px] tracking-widest text-paper-faint">
+              内容导图 · {active.content.title}
+            </p>
+            <button
+              type="button"
+              onClick={() => setMapFullOpen(false)}
+              className="shrink-0 rounded-lg border border-tint/10 p-1.5 text-paper-faint transition-colors hover:text-gold"
+              aria-label="关闭全屏导图"
+            >
+              <X className="size-3.5" strokeWidth={1.5} />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">
+            <MindOverview
+              nodes={active.content.mindMap}
+              title={active.content.title}
+              sectionIds={sectionIds}
+              activeSection={activeSection}
+              onJump={(sectionId) => {
+                const container = contentRef.current;
+                if (container) scrollToSection(container, sectionId);
+                setMapFullOpen(false);
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
+
       {shareOpen && active ? (
         <ShareDialog
           taskId={taskId}
@@ -857,7 +929,47 @@ export function ArticlePanel({
           onClose={() => setShareOpen(false)}
         />
       ) : null}
+    </>
+  );
+
+  // 阅读模式（票 B）：≥xl 右栏挂章节目录，正文保持居中限宽
+  return readerMode ? (
+    <div className="flex h-full min-h-[420px] items-stretch gap-6">
+      <div className="flex min-w-0 flex-1 flex-col gap-4">{body}</div>
+      {active?.content && active.content.sections.length > 0 ? (
+        <aside
+          aria-label="章节目录"
+          className="hidden w-52 shrink-0 overflow-y-auto border-l border-tint/10 pl-5 xl:block"
+        >
+          <p className="pb-2 font-mono text-[10px] tracking-widest text-paper-faint">目录</p>
+          <nav className="flex flex-col gap-0.5">
+            {active.content.sections.map((section, index) => (
+              <button
+                key={section.id}
+                type="button"
+                onClick={() => {
+                  const container = contentRef.current;
+                  if (container) scrollToSection(container, section.id);
+                }}
+                className={`truncate rounded-lg px-2 py-1 text-left text-xs leading-relaxed transition-colors ${
+                  section.id === activeSection
+                    ? "bg-gold/10 text-gold"
+                    : "text-paper-faint hover:bg-tint/5 hover:text-paper-dim"
+                }`}
+                title={section.title}
+              >
+                <span className="mr-1.5 font-mono text-[10px] tracking-widest opacity-70">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                {section.title}
+              </button>
+            ))}
+          </nav>
+        </aside>
+      ) : null}
     </div>
+  ) : (
+    <div className="flex h-full min-h-[420px] flex-col gap-4">{body}</div>
   );
 }
 
