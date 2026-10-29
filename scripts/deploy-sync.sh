@@ -103,14 +103,25 @@ rollback() {
   # 没有上一个健康版本（prev==target，如首次部署或上次已 broken）时，
   # reset 是空操作且「已回滚」通知是误导：显式报无法自动回滚，尽力拉起当前版本
   if [ "$prev" = "$target" ]; then
-    log "CRITICAL 部署失败：$reason，且无上一个健康版本可回滚，需人工处理"
-    systemctl start "$SERVICE" >/dev/null 2>&1 || log "CRITICAL 启动失败，服务保持停止"
-    DEPLOYED_SHA=""
-    FAILED_SHA=$target
-    LAST_RESULT=broken
-    LAST_REASON=$reason
-    save_state
-    notify "v2t 部署失败且无法自动回滚（无上一个健康版本），需人工处理：$reason"
+    log "CRITICAL 部署失败：$reason，且无上一个健康版本可回滚，尽力拉起当前版本"
+    systemctl start "$SERVICE" >/dev/null 2>&1 || true
+    if wait_health; then
+      # 冷编译可能超过健康窗口但服务最终能起来：恢复健康就恢复正常轮转，
+      # 不留 broken/FAILED_SHA 把后续部署挡在门外
+      DEPLOYED_SHA=$target
+      FAILED_SHA=""
+      LAST_RESULT=deployed
+      LAST_REASON="restart-only 失败后恢复健康（$reason）"
+      save_state
+      notify "v2t 部署失败后服务恢复健康（无更早基线可回滚）：$reason"
+    else
+      DEPLOYED_SHA=""
+      FAILED_SHA=$target
+      LAST_RESULT=broken
+      LAST_REASON=$reason
+      save_state
+      notify "v2t 部署失败且无法自动回滚（无上一个健康版本），需人工处理：$reason"
+    fi
     exit 1
   fi
   log "部署失败：$reason，回滚到 ${prev:0:7}"
@@ -200,7 +211,7 @@ deploy() {
     fi
   fi
 
-  if [ "$lock_changed" = "1" ]; then
+  if [ "$restart_only" = "0" ] && [ "$lock_changed" = "1" ]; then
     log "package-lock.json 有变化，执行 npm ci（可能耗时数分钟）"
     if ! ( cd "$REPO" && timeout "$NPM_TIMEOUT" npm ci --no-audit --no-fund ); then
       rollback "$prev" "$target" "npm ci 失败" "$lock_changed"
@@ -449,7 +460,9 @@ main() {
   fi
 
   if [ "$head_sha" = "$target" ]; then
-    deploy "$head_sha" "$target" 1
+    # restart_only 也用 DEPLOYED_SHA 当回滚基线：它与 target 不同时（如上次
+    # 部署 merge 后崩溃），健康检查失败应回到上一个健康版本而不是原地打转
+    deploy "${DEPLOYED_SHA:-$head_sha}" "$target" 1
   else
     deploy "$head_sha" "$target" 0
   fi
