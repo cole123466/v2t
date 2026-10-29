@@ -412,6 +412,17 @@ export function ArticlePanel({
               {stage ? <span className="truncate text-gold/80">· {stage}</span> : null}
             </p>
             <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              {busy && !active?.content ? (
+                <button
+                  type="button"
+                  onClick={() => void cancelGeneration(articles.find((a) => a.status === "streaming")?.id ?? active?.id ?? null)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-danger/30 px-2 py-1 font-mono text-[10px] text-danger/80 transition-colors hover:bg-danger/15"
+                  title="取消本次生成"
+                >
+                  <X className="size-3" strokeWidth={1.5} />
+                  取消
+                </button>
+              ) : null}
               {active?.content ? (
                 <>
                   <button
