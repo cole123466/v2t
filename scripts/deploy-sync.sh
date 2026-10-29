@@ -118,6 +118,10 @@ rollback() {
     fi
   fi
 
+  # 回滚后代码变了，同样清 .next 防 HMR 整页刷新循环；失败不阻断回滚启动
+  log "清除 .next（回滚后防 HMR 刷新循环）"
+  rm -rf "$REPO/.next" || log "清除 .next 失败（忽略，继续启动）"
+
   systemctl start "$SERVICE" >/dev/null 2>&1 || log "CRITICAL 回滚后启动失败"
 
   if wait_health; then
@@ -188,6 +192,13 @@ deploy() {
       rollback "$prev" "$target" "npm ci 失败" "$lock_changed"
     fi
   fi
+
+  # 清掉 .next：dev 模式下重启后浏览器 HMR 客户端状态与新 build 对不上，
+  # 会让开着的标签页陷入整页 reload 循环（2026-10-27、10-29 两次确诊）。
+  # 放在 merge/npm ci 之后：合并失败走 defer 时不清，避免旧服务白白全量重编译；
+  # rm 失败（权限/只读挂载/磁盘异常）只记日志不阻断启动。
+  log "清除 .next（防 HMR 整页刷新循环）"
+  rm -rf "$REPO/.next" || log "清除 .next 失败（忽略，继续启动）"
 
   if ! systemctl start "$SERVICE" >/dev/null 2>&1; then
     rollback "$prev" "$target" "systemctl start 失败" "$lock_changed"
