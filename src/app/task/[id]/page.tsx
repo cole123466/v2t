@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   Archive,
   ArrowLeft,
@@ -24,7 +24,6 @@ import { Player } from "@/components/workbench/player";
 import { Waveform } from "@/components/workbench/waveform";
 import { TranscriptPanel } from "@/components/workbench/transcript-panel";
 import { PromptPanel } from "@/components/workbench/prompt-panel";
-import { ArticlePanel } from "@/components/workbench/article-panel";
 import { QaPanel } from "@/components/workbench/qa-panel";
 import { ProcessPanel } from "@/components/workbench/process-panel";
 import { WaveBars } from "@/components/landing/wave-bars";
@@ -74,11 +73,11 @@ function statusHint(task: Task): string {
   return "正在抽取覆盖全片的画面";
 }
 
-type TabKey = "transcript" | "article" | "qa" | "process" | "copy";
+type TabKey = "transcript" | "qa" | "process" | "copy";
 
+// 图文移到独立的阅读视图 /task/[id]/read（票 B）：工作台四栏，阅读以文章为主体
 const TABS: Array<{ key: TabKey; label: string; icon: typeof FileText }> = [
   { key: "transcript", label: "文稿", icon: Captions },
-  { key: "article", label: "图文", icon: FileText },
   { key: "qa", label: "问答", icon: MessageCircleQuestion },
   { key: "copy", label: "文案", icon: FileText },
   { key: "process", label: "过程", icon: Activity },
@@ -102,6 +101,15 @@ function ProgressWave({ progress }: { progress: number }) {
 
 export default function TaskPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // 票 B：?view=workbench 表示用户明确要留在工作台，就绪后不自动跳阅读
+  const forceWorkbench = searchParams.get("view") === "workbench";
+  // 票 B：阅读视图点时间出处跳回工作台时带 ?t=，媒体就绪后定位一次
+  const [initialSeek] = useState(() => {
+    const t = Number(searchParams.get("t"));
+    return Number.isFinite(t) && t > 0 ? t : 0;
+  });
   const [task, setTask] = useState<Task | null>(null);
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [transcriptMissing, setTranscriptMissing] = useState(false);
@@ -129,6 +137,26 @@ export default function TaskPage() {
     es.onmessage = (e) => setTask(JSON.parse(e.data) as Task);
     return () => es.close();
   }, [id]);
+
+  // 票 B：就绪后默认进阅读视图（?view=workbench 除外）
+  useEffect(() => {
+    if (task?.status === "ready" && !forceWorkbench) {
+      router.replace("/task/" + id + "/read");
+    }
+  }, [task?.status, forceWorkbench, id, router]);
+
+  // 从阅读视图带 ?t= 跳入：媒体元数据就绪后定位一次
+  useEffect(() => {
+    const t = initialSeek;
+    const video = videoRef.current;
+    if (!t || !video) return;
+    const apply = () => {
+      video.currentTime = t;
+      setTime(t);
+    };
+    if (video.readyState >= 1) apply();
+    else video.addEventListener("loadedmetadata", apply, { once: true });
+  }, [task?.status, initialSeek]);
 
   // 任务状态 → 桌宠状态。首次进入只同步基线，不补放“完成”庆祝；
   // 后续真正的状态跃迁才触发一次性动作。
@@ -228,6 +256,23 @@ export default function TaskPage() {
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-4">
+        {task.status === "ready" ? (
+          <nav className="flex gap-1 rounded-2xl border border-tint/10 p-1" aria-label="视图切换">
+            <Link
+              href={"/task/" + id + "?view=workbench"}
+              aria-current="page"
+              className="rounded-xl bg-gold/10 px-3 py-1.5 font-mono text-[10px] tracking-wider text-gold"
+            >
+              工作台
+            </Link>
+            <Link
+              href={"/task/" + id + "/read"}
+              className="rounded-xl px-3 py-1.5 font-mono text-[10px] tracking-wider text-paper-faint transition-colors hover:text-paper-dim"
+            >
+              阅读
+            </Link>
+          </nav>
+        ) : null}
         <PetToggle />
         <ThemeToggle />
         <Link
@@ -511,18 +556,6 @@ export default function TaskPage() {
                   ) : null}
                 </div>
               </div>
-            ) : null}
-            {tab === "article" ? (
-              <ArticlePanel
-                taskId={id}
-                videoRef={videoRef}
-                onAskSection={(sectionId, blockIndex, quote) =>
-                  askWithContext({ kind: "section", sectionId, blockIndex, quote })
-                }
-                onAskFrame={(frameId) => askWithContext({ kind: "frame", frameId })}
-                defaultDetail={task.detailLevel}
-                defaultPurpose={task.purpose}
-              />
             ) : null}
             {tab === "qa" ? (
               <QaPanel
