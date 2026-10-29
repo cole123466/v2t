@@ -267,7 +267,7 @@ export function ArticlePanel({
       abortRef.current?.abort();
       setBusy(false);
       setStage(null);
-      await load();
+      await load().catch((err) => setError(err instanceof Error ? err.message : String(err)));
     }
   };
 
