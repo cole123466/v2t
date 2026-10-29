@@ -398,6 +398,15 @@ main() {
   # 此时代码已在目标提交、闸门已在上一轮通过，直接走「仅重启」路径
   # 完成清 .next + 起服 + 健康检查，保证新版逻辑当次部署就生效
   if [ "${DEPLOY_RESUME:-0}" = "1" ]; then
+    # resume 期间服务是停着的：任何未预期退出都先把服务拉起来
+    # （正常结束时服务已在跑，is-active 短路，等于 no-op）
+    trap 'systemctl is-active --quiet "$SERVICE" 2>/dev/null || systemctl start "$SERVICE" >/dev/null 2>&1 || true' EXIT
+    # 握手一致性：运行中的脚本必须就是 HEAD 里的版本，否则环境变量可能
+    # 来自已被覆盖的旧流程，resume 语义不可信
+    local self_rel=${BASH_SOURCE[0]#$REPO/}
+    if ! git -C "$REPO" show "HEAD:$self_rel" 2>/dev/null | cmp -s - "$BASH_SOURCE"; then
+      log "警告：运行脚本与 HEAD 版本不一致，resume 语义存疑，仅继续本次重启"
+    fi
     if [ "$DRY_RUN" = "1" ]; then log "DRY-RUN resume：仅检查，不重启"; exit 0; fi
     local resumed_sha prev_sha
     resumed_sha=$(git -C "$REPO" rev-parse HEAD) || {
@@ -461,8 +470,11 @@ main() {
 
   if [ "$head_sha" = "$target" ]; then
     # restart_only 也用 DEPLOYED_SHA 当回滚基线：它与 target 不同时（如上次
-    # 部署 merge 后崩溃），健康检查失败应回到上一个健康版本而不是原地打转
-    deploy "${DEPLOYED_SHA:-$head_sha}" "$target" 1
+    # 部署 merge 后崩溃），健康检查失败应回到上一个健康版本而不是原地打转。
+    # lock_changed 按基线差重算（仅影响 rollback 的重装决策，此路径不安装）。
+    local ro_prev="${DEPLOYED_SHA:-$head_sha}" ro_lock=0
+    if git -C "$REPO" diff --name-only "$ro_prev" "$target" -- package-lock.json | grep -q .; then ro_lock=1; fi
+    deploy "$ro_prev" "$target" 1 "$ro_lock"
   else
     deploy "$head_sha" "$target" 0
   fi
