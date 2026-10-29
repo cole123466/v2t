@@ -198,8 +198,16 @@ deploy() {
   # 变更就以新版本重跑：服务已停，resume 路径只做清 .next + 起服。
   local self_rel=${BASH_SOURCE[0]#$REPO/}
   if [ "${DEPLOY_RESUME:-0}" != "1" ] && git -C "$REPO" diff --name-only "$prev" "$target" -- "$self_rel" | grep -q .; then
-    log "部署脚本自身有更新，以新版本重新执行（新逻辑当次生效）"
-    exec env DEPLOY_RESUME=1 bash "$BASH_SOURCE"
+    # exec 后旧进程的 rollback/notify 全部消失，而此时服务是停着的：
+    # 新脚本若有语法错误，服务会一直停着且无人通知。先做语法门禁，
+    # 不过关就继续用当前版本走完本次部署（.next 清理以旧逻辑为准）。
+    if bash -n "$BASH_SOURCE" 2>/dev/null; then
+      log "部署脚本自身有更新，以新版本重新执行（新逻辑当次生效）"
+      exec env DEPLOY_RESUME=1 bash "$BASH_SOURCE"
+    else
+      log "CRITICAL 更新后的 deploy-sync.sh 语法检查未通过，继续用当前版本重启服务，请人工排查新脚本"
+      notify "v2t 部署脚本更新后 bash -n 失败，已跳过自更新重跑，服务按当前版本重启"
+    fi
   fi
 
   # 清掉 .next：dev 模式下重启后浏览器 HMR 客户端状态与新 build 对不上，
@@ -366,10 +374,18 @@ main() {
   # 完成清 .next + 起服 + 健康检查，保证新版逻辑当次部署就生效
   if [ "${DEPLOY_RESUME:-0}" = "1" ]; then
     if [ "$DRY_RUN" = "1" ]; then log "DRY-RUN resume：仅检查，不重启"; exit 0; fi
-    local resumed_sha
-    resumed_sha=$(git -C "$REPO" rev-parse HEAD)
-    log "恢复执行（脚本已更新到 ${resumed_sha:0:7}）"
-    deploy "$resumed_sha" "$resumed_sha" 1
+    local resumed_sha prev_sha
+    resumed_sha=$(git -C "$REPO" rev-parse HEAD) || {
+      # resume 阶段服务是停着的：任何早退都必须先把服务拉起来
+      systemctl start "$SERVICE" >/dev/null 2>&1 || true
+      log "CRITICAL resume 读 HEAD 失败，已按当前工作区重启服务"
+      exit 1
+    }
+    # prev 必须是上一个健康版本（state 的 DEPLOYED_SHA），否则健康检查失败时
+    # rollback 会 reset 到与 target 相同的（可能已坏的）提交，无法自愈
+    prev_sha=${DEPLOYED_SHA:-$resumed_sha}
+    log "恢复执行（脚本已更新，基线 ${prev_sha:0:7} -> ${resumed_sha:0:7}）"
+    deploy "$prev_sha" "$resumed_sha" 1
     return 0
   fi
 
