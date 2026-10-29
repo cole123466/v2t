@@ -108,6 +108,7 @@ export default function TaskReadPage() {
         <ArticlePanel
           taskId={id}
           videoRef={videoRef}
+          readerMode
           defaultDetail={task.detailLevel}
           defaultPurpose={task.purpose}
           onSeekOverride={(t) => router.push("/task/" + id + "?view=workbench&t=" + encodeURIComponent(String(t)))}
