@@ -100,6 +100,19 @@ defer() {
 
 rollback() {
   local prev=$1 target=$2 reason=$3 lock_changed=$4
+  # 没有上一个健康版本（prev==target，如首次部署或上次已 broken）时，
+  # reset 是空操作且「已回滚」通知是误导：显式报无法自动回滚，尽力拉起当前版本
+  if [ "$prev" = "$target" ]; then
+    log "CRITICAL 部署失败：$reason，且无上一个健康版本可回滚，需人工处理"
+    systemctl start "$SERVICE" >/dev/null 2>&1 || log "CRITICAL 启动失败，服务保持停止"
+    DEPLOYED_SHA=""
+    FAILED_SHA=$target
+    LAST_RESULT=broken
+    LAST_REASON=$reason
+    save_state
+    notify "v2t 部署失败且无法自动回滚（无上一个健康版本），需人工处理：$reason"
+    exit 1
+  fi
   log "部署失败：$reason，回滚到 ${prev:0:7}"
   systemctl stop "$SERVICE" >/dev/null 2>&1 || true
 
@@ -145,7 +158,8 @@ rollback() {
 
 deploy() {
   local prev=$1 target=$2 restart_only=$3
-  local lock_changed=0
+  # 第 4 参：resume 重跑时透传外层已计算的 lock_changed（restart_only=1 不会重算）
+  local lock_changed=${4:-0}
 
   if [ "$restart_only" = "1" ]; then
     log "代码已在目标提交，仅重启 $SERVICE"
@@ -203,7 +217,7 @@ deploy() {
     # 不过关就继续用当前版本走完本次部署（.next 清理以旧逻辑为准）。
     if bash -n "$BASH_SOURCE" 2>/dev/null; then
       log "部署脚本自身有更新，以新版本重新执行（新逻辑当次生效）"
-      exec env DEPLOY_RESUME=1 bash "$BASH_SOURCE"
+      exec env DEPLOY_RESUME=1 DEPLOY_RESUME_LOCK_CHANGED=$lock_changed bash "$BASH_SOURCE"
     else
       log "CRITICAL 更新后的 deploy-sync.sh 语法检查未通过，继续用当前版本重启服务，请人工排查新脚本"
       notify "v2t 部署脚本更新后 bash -n 失败，已跳过自更新重跑，服务按当前版本重启"
@@ -382,10 +396,19 @@ main() {
       exit 1
     }
     # prev 必须是上一个健康版本（state 的 DEPLOYED_SHA），否则健康检查失败时
-    # rollback 会 reset 到与 target 相同的（可能已坏的）提交，无法自愈
-    prev_sha=${DEPLOYED_SHA:-$resumed_sha}
+    # rollback 会 reset 到与 target 相同的（可能已坏的）提交，无法自愈。
+    # DEPLOYED_SHA 为空（首次部署 / 上次 broken）时没有可回滚基线：仍按当前
+    # 提交重启，但 rollback 会显式报「无法自动回滚」而不是谎称已回滚。
+    if [ -n "$DEPLOYED_SHA" ]; then
+      prev_sha=$DEPLOYED_SHA
+    else
+      prev_sha=$resumed_sha
+      log "警告：state 无上一个健康版本（DEPLOYED_SHA 为空），resume 失败时无法自动回滚"
+    fi
     log "恢复执行（脚本已更新，基线 ${prev_sha:0:7} -> ${resumed_sha:0:7}）"
-    deploy "$prev_sha" "$resumed_sha" 1
+    # lock_changed 透传：旧进程 exec 前可能已按新依赖树跑过 npm ci，
+    # 回滚到 prev 时必须重装旧依赖，否则旧代码配新 node_modules 起不来
+    deploy "$prev_sha" "$resumed_sha" 1 "${DEPLOY_RESUME_LOCK_CHANGED:-0}"
     return 0
   fi
 
