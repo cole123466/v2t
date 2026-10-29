@@ -170,3 +170,9 @@ Next.js 16（App Router / Turbopack）· React 19 · Tailwind CSS v4 · motion �
 - 默认 12 张全景帧，覆盖稀疏，文章与问答会在 `limitations` 中说明
 - 任务串行处理：同一时刻处理 1 个，最多再排队 3 个，队列满时新任务返回 429（`QUEUE_FULL`）
 - 本地单人使用，无鉴权
+
+## 自动化链路
+
+本仓库的改动由全自动流水线驱动：开出 issue 后 poller 自动捕获并打 `agent-queued` 标签，
+planner 生成计划，agent 在 worktree 分支实施并开出 PR；review watcher 自动送审并给出 tier 决策，
+合并（auto-merge 或人工确认）后由 deploy timer 部署上线，结果评论回原 issue，全程无需人工干预。
