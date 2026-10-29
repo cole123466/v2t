@@ -56,6 +56,10 @@ export async function GET(
     // 客户端中断后 toWeb 写已关闭的 controller 会抛 ERR_INVALID_STATE，
     // 吞掉读取端错误避免 uncaughtException 打死进程
     stream.on("error", () => {});
+    // node 侧 error 监听拦不住 web 侧适配器的 ERR_INVALID_STATE：
+    // abort 后在途数据仍会 enqueue 进已关闭的 controller（2026-10-29 16:31
+    // 的 uncaughtException 即此）。abort 时立刻销毁文件流，掐断在途写入。
+    req.signal.addEventListener("abort", () => stream.destroy(), { once: true });
     return new Response(Readable.toWeb(stream) as ReadableStream, {
       status: 206,
       headers: {
@@ -69,6 +73,8 @@ export async function GET(
 
   const stream = createReadStream(file);
   stream.on("error", () => {});
+  // 同上：abort 即销毁，防止 toWeb 适配器写已关闭的 controller
+  req.signal.addEventListener("abort", () => stream.destroy(), { once: true });
   return new Response(Readable.toWeb(stream) as ReadableStream, {
     headers: {
       "content-type": type,
