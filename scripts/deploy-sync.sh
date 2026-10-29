@@ -174,7 +174,7 @@ deploy() {
 
   if [ "$restart_only" = "1" ]; then
     log "代码已在目标提交，仅重启 $SERVICE"
-    notify "v2t 开始部署 ${prev:0:7}（代码已在目标提交，仅重启）"
+    notify "v2t 开始部署 ${target:0:7}（代码已在目标提交，仅重启）"
   else
     log "开始部署 ${prev:0:7} -> ${target:0:7}"
     notify "v2t 开始部署 ${prev:0:7} -> ${target:0:7}"
@@ -398,8 +398,10 @@ main() {
   # 此时代码已在目标提交、闸门已在上一轮通过，直接走「仅重启」路径
   # 完成清 .next + 起服 + 健康检查，保证新版逻辑当次部署就生效
   if [ "${DEPLOY_RESUME:-0}" = "1" ]; then
+    if [ "$DRY_RUN" = "1" ]; then log "DRY-RUN resume：仅检查，不重启"; exit 0; fi
     # resume 期间服务是停着的：任何未预期退出都先把服务拉起来
     # （正常结束时服务已在跑，is-active 短路，等于 no-op）
+    # 注意：trap 必须在 DRY_RUN 早退之后注册，否则 dry-run 会真的启动服务
     trap 'systemctl is-active --quiet "$SERVICE" 2>/dev/null || systemctl start "$SERVICE" >/dev/null 2>&1 || true' EXIT
     # 握手一致性：运行中的脚本必须就是 HEAD 里的版本，否则环境变量可能
     # 来自已被覆盖的旧流程，resume 语义不可信
