@@ -256,12 +256,19 @@ export function ArticlePanel({
     }
   };
 
-  const cancelGeneration = async (articleId: string) => {
-    await fetch(`/api/tasks/${taskId}/articles/${articleId}/cancel`, { method: "POST" });
-    abortRef.current?.abort();
-    setBusy(false);
-    setStage(null);
-    await load();
+  const cancelGeneration = async (articleId: string | null) => {
+    try {
+      if (articleId) {
+        await fetch(`/api/tasks/${taskId}/articles/${articleId}/cancel`, { method: "POST" });
+      }
+    } catch {
+      // 取消请求本身失败不阻塞本地清理
+    } finally {
+      abortRef.current?.abort();
+      setBusy(false);
+      setStage(null);
+      await load();
+    }
   };
 
   const resumeGeneration = async (articleId: string) => {
@@ -373,6 +380,8 @@ export function ArticlePanel({
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setExporting(null);
     }
@@ -455,7 +464,7 @@ export function ArticlePanel({
                   {busy ? (
                     <button
                       type="button"
-                      onClick={() => void cancelGeneration(active.id)}
+                      onClick={() => void cancelGeneration(articles.find((a) => a.status === "streaming")?.id ?? active.id)}
                       className="inline-flex items-center gap-1 rounded-lg border border-danger/30 px-2 py-1 font-mono text-[10px] text-danger/80 transition-colors hover:bg-danger/15"
                     >
                       <X className="size-3" strokeWidth={1.5} />
@@ -482,15 +491,6 @@ export function ArticlePanel({
                     </button>
                   )}
                 </>
-              ) : !busy ? (
-                <button
-                  type="button"
-                  onClick={() => void generate()}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-gold/40 bg-gold/10 px-3 py-1.5 font-mono text-[11px] tracking-wider text-gold transition-colors hover:bg-gold/20"
-                >
-                  <FileText className="size-3.5" strokeWidth={1.5} />
-                  生成图文文章
-                </button>
               ) : null}
             </div>
           </div>
