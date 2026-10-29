@@ -100,6 +100,30 @@ defer() {
 
 rollback() {
   local prev=$1 target=$2 reason=$3 lock_changed=$4
+  # 没有上一个健康版本（prev==target，如首次部署或上次已 broken）时，
+  # reset 是空操作且「已回滚」通知是误导：显式报无法自动回滚，尽力拉起当前版本
+  if [ "$prev" = "$target" ]; then
+    log "CRITICAL 部署失败：$reason，且无上一个健康版本可回滚，尽力拉起当前版本"
+    systemctl start "$SERVICE" >/dev/null 2>&1 || true
+    if wait_health; then
+      # 冷编译可能超过健康窗口但服务最终能起来：恢复健康就恢复正常轮转，
+      # 不留 broken/FAILED_SHA 把后续部署挡在门外
+      DEPLOYED_SHA=$target
+      FAILED_SHA=""
+      LAST_RESULT=deployed
+      LAST_REASON="restart-only 失败后恢复健康（$reason）"
+      save_state
+      notify "v2t 部署失败后服务恢复健康（无更早基线可回滚）：$reason"
+    else
+      DEPLOYED_SHA=""
+      FAILED_SHA=$target
+      LAST_RESULT=broken
+      LAST_REASON=$reason
+      save_state
+      notify "v2t 部署失败且无法自动回滚（无上一个健康版本），需人工处理：$reason"
+    fi
+    exit 1
+  fi
   log "部署失败：$reason，回滚到 ${prev:0:7}"
   systemctl stop "$SERVICE" >/dev/null 2>&1 || true
 
@@ -145,11 +169,12 @@ rollback() {
 
 deploy() {
   local prev=$1 target=$2 restart_only=$3
-  local lock_changed=0
+  # 第 4 参：resume 重跑时透传外层已计算的 lock_changed（restart_only=1 不会重算）
+  local lock_changed=${4:-0}
 
   if [ "$restart_only" = "1" ]; then
     log "代码已在目标提交，仅重启 $SERVICE"
-    notify "v2t 开始部署 ${prev:0:7}（代码已在目标提交，仅重启）"
+    notify "v2t 开始部署 ${target:0:7}（代码已在目标提交，仅重启）"
   else
     log "开始部署 ${prev:0:7} -> ${target:0:7}"
     notify "v2t 开始部署 ${prev:0:7} -> ${target:0:7}"
@@ -186,10 +211,27 @@ deploy() {
     fi
   fi
 
-  if [ "$lock_changed" = "1" ]; then
+  if [ "$restart_only" = "0" ] && [ "$lock_changed" = "1" ]; then
     log "package-lock.json 有变化，执行 npm ci（可能耗时数分钟）"
     if ! ( cd "$REPO" && timeout "$NPM_TIMEOUT" npm ci --no-audit --no-fund ); then
       rollback "$prev" "$target" "npm ci 失败" "$lock_changed"
+    fi
+  fi
+
+  # merge / npm ci 可能更新了本脚本自身，而当前进程还在跑旧代码
+  # （2026-10-29 #48 合入那次，清 .next 因此未执行）。检测到脚本自身
+  # 变更就以新版本重跑：服务已停，resume 路径只做清 .next + 起服。
+  local self_rel=${BASH_SOURCE[0]#$REPO/}
+  if [ "${DEPLOY_RESUME:-0}" != "1" ] && git -C "$REPO" diff --name-only "$prev" "$target" -- "$self_rel" | grep -q .; then
+    # exec 后旧进程的 rollback/notify 全部消失，而此时服务是停着的：
+    # 新脚本若有语法错误，服务会一直停着且无人通知。先做语法门禁，
+    # 不过关就继续用当前版本走完本次部署（.next 清理以旧逻辑为准）。
+    if bash -n "$BASH_SOURCE" 2>/dev/null; then
+      log "部署脚本自身有更新，以新版本重新执行（新逻辑当次生效）"
+      exec env DEPLOY_RESUME=1 DEPLOY_RESUME_LOCK_CHANGED=$lock_changed bash "$BASH_SOURCE"
+    else
+      log "CRITICAL 更新后的 deploy-sync.sh 语法检查未通过，继续用当前版本重启服务，请人工排查新脚本"
+      notify "v2t 部署脚本更新后 bash -n 失败，已跳过自更新重跑，服务按当前版本重启"
     fi
   fi
 
@@ -198,7 +240,8 @@ deploy() {
   # 放在 merge/npm ci 之后：合并失败走 defer 时不清，避免旧服务白白全量重编译；
   # rm 失败（权限/只读挂载/磁盘异常）只记日志不阻断启动。
   log "清除 .next（防 HMR 整页刷新循环）"
-  rm -rf "$REPO/.next" || log "清除 .next 失败（忽略，继续启动）"
+  rm -rf "$REPO/.next" && log ".next 已清除" || log "清除 .next 失败（忽略，继续启动）"
+  [ ! -d "$REPO/.next" ] || log "警告：.next 清除后仍存在，检查磁盘/权限"
 
   if ! systemctl start "$SERVICE" >/dev/null 2>&1; then
     rollback "$prev" "$target" "systemctl start 失败" "$lock_changed"
@@ -351,6 +394,46 @@ main() {
     flock -n 9 || { log "已有部署在跑，跳过"; exit 0; }
   fi
 
+  # 旧版脚本在部署中途把自己更新（merge 带入新版）后，用 DEPLOY_RESUME=1 重进：
+  # 此时代码已在目标提交、闸门已在上一轮通过，直接走「仅重启」路径
+  # 完成清 .next + 起服 + 健康检查，保证新版逻辑当次部署就生效
+  if [ "${DEPLOY_RESUME:-0}" = "1" ]; then
+    if [ "$DRY_RUN" = "1" ]; then log "DRY-RUN resume：仅检查，不重启"; exit 0; fi
+    # resume 期间服务是停着的：任何未预期退出都先把服务拉起来
+    # （正常结束时服务已在跑，is-active 短路，等于 no-op）
+    # 注意：trap 必须在 DRY_RUN 早退之后注册，否则 dry-run 会真的启动服务
+    trap 'systemctl is-active --quiet "$SERVICE" 2>/dev/null || systemctl start "$SERVICE" >/dev/null 2>&1 || true' EXIT
+    # 握手一致性：运行中的脚本必须就是 HEAD 里的版本，否则环境变量可能
+    # 来自已被覆盖的旧流程，resume 语义不可信
+    local self_rel=${BASH_SOURCE[0]#$REPO/}
+    if ! git -C "$REPO" show "HEAD:$self_rel" 2>/dev/null | cmp -s - "$BASH_SOURCE"; then
+      log "警告：运行脚本与 HEAD 版本不一致，resume 语义存疑，仅继续本次重启"
+    fi
+    if [ "$DRY_RUN" = "1" ]; then log "DRY-RUN resume：仅检查，不重启"; exit 0; fi
+    local resumed_sha prev_sha
+    resumed_sha=$(git -C "$REPO" rev-parse HEAD) || {
+      # resume 阶段服务是停着的：任何早退都必须先把服务拉起来
+      systemctl start "$SERVICE" >/dev/null 2>&1 || true
+      log "CRITICAL resume 读 HEAD 失败，已按当前工作区重启服务"
+      exit 1
+    }
+    # prev 必须是上一个健康版本（state 的 DEPLOYED_SHA），否则健康检查失败时
+    # rollback 会 reset 到与 target 相同的（可能已坏的）提交，无法自愈。
+    # DEPLOYED_SHA 为空（首次部署 / 上次 broken）时没有可回滚基线：仍按当前
+    # 提交重启，但 rollback 会显式报「无法自动回滚」而不是谎称已回滚。
+    if [ -n "$DEPLOYED_SHA" ]; then
+      prev_sha=$DEPLOYED_SHA
+    else
+      prev_sha=$resumed_sha
+      log "警告：state 无上一个健康版本（DEPLOYED_SHA 为空），resume 失败时无法自动回滚"
+    fi
+    log "恢复执行（脚本已更新，基线 ${prev_sha:0:7} -> ${resumed_sha:0:7}）"
+    # lock_changed 透传：旧进程 exec 前可能已按新依赖树跑过 npm ci，
+    # 回滚到 prev 时必须重装旧依赖，否则旧代码配新 node_modules 起不来
+    deploy "$prev_sha" "$resumed_sha" 1 "${DEPLOY_RESUME_LOCK_CHANGED:-0}"
+    return 0
+  fi
+
   local fetch_out target head_sha cur blockers
   if ! fetch_out=$(cd "$REPO" && GIT_TERMINAL_PROMPT=0 timeout "$GIT_TIMEOUT" git fetch --no-write-fetch-head "$REMOTE" "$BRANCH" --quiet 2>&1); then
     defer "git fetch 失败：$(printf '%s' "$fetch_out" | head -1)"
@@ -388,7 +471,12 @@ main() {
   fi
 
   if [ "$head_sha" = "$target" ]; then
-    deploy "$head_sha" "$target" 1
+    # restart_only 也用 DEPLOYED_SHA 当回滚基线：它与 target 不同时（如上次
+    # 部署 merge 后崩溃），健康检查失败应回到上一个健康版本而不是原地打转。
+    # lock_changed 按基线差重算（仅影响 rollback 的重装决策，此路径不安装）。
+    local ro_prev="${DEPLOYED_SHA:-$head_sha}" ro_lock=0
+    if git -C "$REPO" diff --name-only "$ro_prev" "$target" -- package-lock.json | grep -q .; then ro_lock=1; fi
+    deploy "$ro_prev" "$target" 1 "$ro_lock"
   else
     deploy "$head_sha" "$target" 0
   fi
