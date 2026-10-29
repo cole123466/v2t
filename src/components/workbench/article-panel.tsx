@@ -20,6 +20,7 @@ import { ReviewSidebar } from "./review-sidebar";
 import { SelectionPopover } from "./selection-popover";
 import { RequestIdLine } from "./request-id";
 import { MindOverview } from "./mind-overview";
+import { RunProgress } from "./run-progress";
 import { scrollToSection, useContainerSpy } from "@/lib/container-spy";
 import { ShareDialog } from "./share-dialog";
 import { petFlow } from "@/components/pet/pet-flow";
@@ -513,10 +514,21 @@ export function ArticlePanel({
         ) : null}
       </div>
 
-      {busy && streamText ? (
-        <div className="glass min-h-0 flex-1 overflow-auto rounded-2xl p-5 font-mono text-[11px] leading-relaxed text-paper-faint">
-          <pre className="whitespace-pre-wrap break-words">{streamText}</pre>
-        </div>
+      {busy ? (
+        <>
+          {/* 生成过程内嵌（vid-lens RunView 对齐）：阅读路线 + 现场记录，替代裸流文本 */}
+          <RunProgress taskId={taskId} live />
+          {streamText ? (
+            <details className="glass shrink-0 rounded-2xl px-5 py-3">
+              <summary className="cursor-pointer select-none font-mono text-[10px] tracking-widest text-paper-faint">
+                原始流输出
+              </summary>
+              <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-paper-faint">
+                {streamText}
+              </pre>
+            </details>
+          ) : null}
+        </>
       ) : null}
 
       {active?.content ? (
