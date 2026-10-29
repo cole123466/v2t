@@ -21,6 +21,13 @@
 
 set -euo pipefail
 
+# resume 模式全局安全网：exec 重进的进程在配置/state 加载阶段就可能因 set -e
+# 失败退出，而此时旧进程已停服——安全网必须先于任何加载逻辑注册。
+# DRY_RUN（在 main 里置位）时不动服务；正常结束时 is-active 短路，等于 no-op。
+if [ "${DEPLOY_RESUME:-0}" = "1" ]; then
+  trap 'if [ "${DRY_RUN:-0}" != "1" ]; then systemctl is-active --quiet "${DEPLOY_SERVICE:-v2t-dev.service}" 2>/dev/null || systemctl start "${DEPLOY_SERVICE:-v2t-dev.service}" >/dev/null 2>&1 || true; fi' EXIT
+fi
+
 CONFIG=${DEPLOY_CONFIG:-/etc/v2t-deploy.conf}
 if [ -r "$CONFIG" ]; then
   # shellcheck disable=SC1090
@@ -228,7 +235,7 @@ deploy() {
     # 不过关就继续用当前版本走完本次部署（.next 清理以旧逻辑为准）。
     if bash -n "$BASH_SOURCE" 2>/dev/null; then
       log "部署脚本自身有更新，以新版本重新执行（新逻辑当次生效）"
-      exec env DEPLOY_RESUME=1 DEPLOY_RESUME_LOCK_CHANGED=$lock_changed bash "$BASH_SOURCE"
+      exec env DEPLOY_RESUME=1 bash "$BASH_SOURCE"
     else
       log "CRITICAL 更新后的 deploy-sync.sh 语法检查未通过，继续用当前版本重启服务，请人工排查新脚本"
       notify "v2t 部署脚本更新后 bash -n 失败，已跳过自更新重跑，服务按当前版本重启"
@@ -428,9 +435,12 @@ main() {
       log "警告：state 无上一个健康版本（DEPLOYED_SHA 为空），resume 失败时无法自动回滚"
     fi
     log "恢复执行（脚本已更新，基线 ${prev_sha:0:7} -> ${resumed_sha:0:7}）"
-    # lock_changed 透传：旧进程 exec 前可能已按新依赖树跑过 npm ci，
-    # 回滚到 prev 时必须重装旧依赖，否则旧代码配新 node_modules 起不来
-    deploy "$prev_sha" "$resumed_sha" 1 "${DEPLOY_RESUME_LOCK_CHANGED:-0}"
+    # lock_changed 按真实回滚基线（prev_sha..resumed_sha）就地重算：
+    # env 透传的值是外层按 head_sha..target 算的，state 与 HEAD 发散时范围
+    # 不对齐，会漏判「旧代码配新 node_modules」的回滚场景
+    local ro_lock=0
+    if git -C "$REPO" diff --name-only "$prev_sha" "$resumed_sha" -- package-lock.json | grep -q .; then ro_lock=1; fi
+    deploy "$prev_sha" "$resumed_sha" 1 "$ro_lock"
     return 0
   fi
 
