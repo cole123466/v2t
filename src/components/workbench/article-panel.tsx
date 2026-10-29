@@ -33,6 +33,7 @@ export function ArticlePanel({
   defaultDetail,
   defaultPurpose,
   onSeekOverride,
+  readerMode,
 }: {
   taskId: string;
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -45,6 +46,8 @@ export function ArticlePanel({
   defaultPurpose?: string | null;
   /** 阅读视图（票 B）：无播放器，时间出处点击改为跳工作台定位 */
   onSeekOverride?: (t: number) => void;
+  /** 阅读模式（票 A）：生成驾驶舱收成细工具条，审稿侧栏不渲染 */
+  readerMode?: boolean;
 }) {
   const [articles, setArticles] = useState<ArticleRecord[]>([]);
   const [busy, setBusy] = useState(false);
@@ -60,6 +63,8 @@ export function ArticlePanel({
   // 正文滚动容器：选区浮层定位、导图联动与章节定位都基于它（window 不滚，06 号票 K3）
   const contentRef = useRef<HTMLDivElement>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  // 阅读模式的导出下拉菜单开关
+  const [exportMenu, setExportMenu] = useState(false);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
   const abortRef = useRef<AbortController | null>(null);
   // 审稿旁栏「查看对应章节」的容器内定位句柄
@@ -251,12 +256,19 @@ export function ArticlePanel({
     }
   };
 
-  const cancelGeneration = async (articleId: string) => {
-    await fetch(`/api/tasks/${taskId}/articles/${articleId}/cancel`, { method: "POST" });
-    abortRef.current?.abort();
-    setBusy(false);
-    setStage(null);
-    await load();
+  const cancelGeneration = async (articleId: string | null) => {
+    try {
+      if (articleId) {
+        await fetch(`/api/tasks/${taskId}/articles/${articleId}/cancel`, { method: "POST" });
+      }
+    } catch {
+      // 取消请求本身失败不阻塞本地清理
+    } finally {
+      abortRef.current?.abort();
+      setBusy(false);
+      setStage(null);
+      await load().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    }
   };
 
   const resumeGeneration = async (articleId: string) => {
@@ -368,6 +380,8 @@ export function ArticlePanel({
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setExporting(null);
     }
@@ -375,6 +389,121 @@ export function ArticlePanel({
 
   return (
     <div className="flex h-full min-h-[420px] flex-col gap-4">
+      {readerMode ? (
+        /* 阅读模式（票 A）：驾驶舱收成细工具条，深度/关注点回工作台调 */
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <p className="flex min-w-0 items-center gap-2 font-mono text-[10px] tracking-widest text-paper-faint">
+              <FileText className="size-3.5 shrink-0" strokeWidth={1.5} />
+              图文文章
+              {stage ? <span className="truncate text-gold/80">· {stage}</span> : null}
+            </p>
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+              {active?.content ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setShareOpen(true)}
+                    disabled={active.status !== "done"}
+                    className="inline-flex items-center gap-1 font-mono text-[10px] text-paper-faint transition-colors hover:text-gold disabled:opacity-50"
+                    title="创建只读分享链接"
+                  >
+                    <Link2 className="size-3" strokeWidth={1.5} />
+                    分享
+                  </button>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setExportMenu((v) => !v)}
+                      disabled={exporting !== null}
+                      aria-expanded={exportMenu}
+                      className="inline-flex items-center gap-1 rounded-lg border border-gold/40 bg-gold/10 px-2 py-1 font-mono text-[10px] text-gold transition-colors hover:bg-gold/20 disabled:opacity-50"
+                    >
+                      {exporting !== null ? (
+                        <Loader className="size-3 animate-spin" strokeWidth={1.5} />
+                      ) : (
+                        <FileDown className="size-3" strokeWidth={1.5} />
+                      )}
+                      导出
+                    </button>
+                    {exportMenu ? (
+                      <>
+                        <button
+                          type="button"
+                          aria-label="关闭导出菜单"
+                          className="fixed inset-0 z-10 cursor-default"
+                          onClick={() => setExportMenu(false)}
+                        />
+                        <div className="absolute right-0 top-full z-20 mt-1.5 w-36 rounded-xl border border-tint/10 bg-ink-950 p-1 shadow-xl">
+                          {(
+                            [
+                              ["pdf", "PDF（打印）", Printer],
+                              ["html", "HTML", FileDown],
+                              ["md", "Markdown", Download],
+                              ["zip", "图文 ZIP", Archive],
+                            ] as const
+                          ).map(([kind, label, Icon]) => (
+                            <button
+                              key={kind}
+                              type="button"
+                              onClick={() => {
+                                setExportMenu(false);
+                                if (kind === "pdf") void exportPdf();
+                                else void download(kind);
+                              }}
+                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 font-mono text-[10px] text-paper-faint transition-colors hover:bg-gold/10 hover:text-gold"
+                            >
+                              <Icon className="size-3" strokeWidth={1.5} />
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                  {busy ? (
+                    <button
+                      type="button"
+                      onClick={() => void cancelGeneration(articles.find((a) => a.status === "streaming")?.id ?? active.id)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-danger/30 px-2 py-1 font-mono text-[10px] text-danger/80 transition-colors hover:bg-danger/15"
+                    >
+                      <X className="size-3" strokeWidth={1.5} />
+                      取消
+                    </button>
+                  ) : active.status === "interrupted" || active.status === "failed" ? (
+                    <button
+                      type="button"
+                      onClick={() => void resumeGeneration(active.id)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-gold/40 px-2 py-1 font-mono text-[10px] text-gold transition-colors hover:bg-gold/10"
+                    >
+                      <RotateCcw className="size-3" strokeWidth={1.5} />
+                      继续生成
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void generate()}
+                      className="inline-flex items-center gap-1 rounded-lg border border-tint/10 px-2 py-1 font-mono text-[10px] text-paper-faint transition-colors hover:border-gold/40 hover:text-gold"
+                      title="用当前深度与关注点重新生成"
+                    >
+                      <RotateCcw className="size-3" strokeWidth={1.5} />
+                      重新生成
+                    </button>
+                  )}
+                </>
+              ) : null}
+            </div>
+          </div>
+          {error ? (
+            <div className="shrink-0 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] leading-relaxed text-danger/90">
+              <span className="min-w-0 break-words">
+                {error}
+                <RequestIdLine id={requestId} />
+              </span>
+            </div>
+          ) : null}
+        </>
+      ) : (
       <div className="glass rounded-2xl p-4">
         <div className="flex items-center justify-between">
           <p className="flex items-center gap-2 font-mono text-[10px] tracking-widest text-paper-faint">
@@ -521,6 +650,7 @@ export function ArticlePanel({
           </div>
         ) : null}
       </div>
+      )}
 
       {busy ? (
         <>
@@ -539,7 +669,7 @@ export function ArticlePanel({
         </>
       ) : null}
 
-      {active?.content ? (
+      {!readerMode && active?.content ? (
         <ReviewSidebar
           taskId={taskId}
           articleId={active.id}
@@ -697,8 +827,21 @@ export function ArticlePanel({
           <FileText className="size-7 text-paper-faint" strokeWidth={1.5} />
           <p className="text-sm text-paper-dim">还没有图文文章</p>
           <p className="max-w-xs text-xs leading-relaxed text-paper-faint">
-            基于转写稿与全景画面生成带章节、时间出处和内容导图的文章。挑选深度后点上方按钮开始。
+            基于转写稿与全景画面生成带章节、时间出处和内容导图的文章。
           </p>
+          {readerMode ? (
+            <button
+              type="button"
+              onClick={() => void generate()}
+              disabled={busy}
+              className="inline-flex items-center gap-2 rounded-xl border border-gold/40 bg-gold/10 px-4 py-2 font-mono text-[11px] tracking-wider text-gold transition-colors hover:bg-gold/20 disabled:opacity-40"
+            >
+              <FileText className="size-3.5" strokeWidth={1.5} />
+              生成图文文章
+            </button>
+          ) : (
+            <p className="text-xs text-paper-faint">挑选深度后点上方按钮开始。</p>
+          )}
           {(active?.status === "failed" || active?.status === "interrupted") && active.error ? (
             <p className="max-w-sm break-all font-mono text-[10px] leading-relaxed text-danger/70">
               {active.error}
