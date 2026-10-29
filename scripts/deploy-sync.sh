@@ -193,12 +193,22 @@ deploy() {
     fi
   fi
 
+  # merge / npm ci 可能更新了本脚本自身，而当前进程还在跑旧代码
+  # （2026-10-29 #48 合入那次，清 .next 因此未执行）。检测到脚本自身
+  # 变更就以新版本重跑：服务已停，resume 路径只做清 .next + 起服。
+  local self_rel=${BASH_SOURCE[0]#$REPO/}
+  if [ "${DEPLOY_RESUME:-0}" != "1" ] && git -C "$REPO" diff --name-only "$prev" "$target" -- "$self_rel" | grep -q .; then
+    log "部署脚本自身有更新，以新版本重新执行（新逻辑当次生效）"
+    exec env DEPLOY_RESUME=1 bash "$BASH_SOURCE"
+  fi
+
   # 清掉 .next：dev 模式下重启后浏览器 HMR 客户端状态与新 build 对不上，
   # 会让开着的标签页陷入整页 reload 循环（2026-10-27、10-29 两次确诊）。
   # 放在 merge/npm ci 之后：合并失败走 defer 时不清，避免旧服务白白全量重编译；
   # rm 失败（权限/只读挂载/磁盘异常）只记日志不阻断启动。
   log "清除 .next（防 HMR 整页刷新循环）"
-  rm -rf "$REPO/.next" || log "清除 .next 失败（忽略，继续启动）"
+  rm -rf "$REPO/.next" && log ".next 已清除" || log "清除 .next 失败（忽略，继续启动）"
+  [ ! -d "$REPO/.next" ] || log "警告：.next 清除后仍存在，检查磁盘/权限"
 
   if ! systemctl start "$SERVICE" >/dev/null 2>&1; then
     rollback "$prev" "$target" "systemctl start 失败" "$lock_changed"
@@ -349,6 +359,18 @@ main() {
   if [ "$DRY_RUN" != "1" ]; then
     exec 9>"$LOCK_FILE"
     flock -n 9 || { log "已有部署在跑，跳过"; exit 0; }
+  fi
+
+  # 旧版脚本在部署中途把自己更新（merge 带入新版）后，用 DEPLOY_RESUME=1 重进：
+  # 此时代码已在目标提交、闸门已在上一轮通过，直接走「仅重启」路径
+  # 完成清 .next + 起服 + 健康检查，保证新版逻辑当次部署就生效
+  if [ "${DEPLOY_RESUME:-0}" = "1" ]; then
+    if [ "$DRY_RUN" = "1" ]; then log "DRY-RUN resume：仅检查，不重启"; exit 0; fi
+    local resumed_sha
+    resumed_sha=$(git -C "$REPO" rev-parse HEAD)
+    log "恢复执行（脚本已更新到 ${resumed_sha:0:7}）"
+    deploy "$resumed_sha" "$resumed_sha" 1
+    return 0
   fi
 
   local fetch_out target head_sha cur blockers
