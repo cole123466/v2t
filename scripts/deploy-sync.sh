@@ -145,8 +145,10 @@ deploy() {
 
   if [ "$restart_only" = "1" ]; then
     log "代码已在目标提交，仅重启 $SERVICE"
+    notify "v2t 开始部署 ${prev:0:7}（代码已在目标提交，仅重启）"
   else
     log "开始部署 ${prev:0:7} -> ${target:0:7}"
+    notify "v2t 开始部署 ${prev:0:7} -> ${target:0:7}"
     if git -C "$REPO" diff --name-only "$prev" "$target" | grep -qx 'package-lock.json'; then
       lock_changed=1
     fi
