@@ -112,7 +112,7 @@ export function ShareDialog({
     <dialog
       ref={ref}
       onClose={onClose}
-      className="glass w-[30rem] max-w-[calc(100vw-2rem)] rounded-2xl p-5 text-paper backdrop:bg-black/50"
+      className="glass m-auto w-[30rem] max-w-[calc(100vw-2rem)] rounded-2xl p-5 text-paper backdrop:bg-black/50"
     >
       <div className="flex items-center justify-between">
         <p className="font-mono text-[10px] tracking-widest text-paper-faint">分享这篇图文</p>
