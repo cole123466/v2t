@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { MindMapNode } from "@/server/article";
 import {
@@ -45,6 +45,20 @@ export function MindOverview({
   const movedRef = useRef(false);
   const [dragging, setDragging] = useState(false);
 
+  // pointerId 贯穿校验：只有发起拖拽的那只指针能结束拖拽，
+  // 触摸、右键等其他指针的 up/cancel 不会误终止
+  const endDrag = useCallback((pointerId?: number) => {
+    const d = dragRef.current;
+    if (d && pointerId !== undefined && pointerId !== d.id) return;
+    dragRef.current = null;
+    setDragging(false);
+    // click 在 pointerup 之后同步派发，拖拽后的误点 click 要拦；
+    // 延迟一拍复位，不影响之后的触摸点按与键盘 Enter
+    window.setTimeout(() => {
+      movedRef.current = false;
+    }, 0);
+  }, []);
+
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.pointerType !== "mouse" || e.button !== 0) return;
     const el = scrollRef.current;
@@ -52,15 +66,18 @@ export function MindOverview({
     dragRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
     movedRef.current = false;
     setDragging(true);
-    // 按下不捕获指针（会把节点 click 改道到容器），捕获推迟到越过阈值；
-    // 捕获前在容器外松开时靠 window 级兜底清理，防止 dragRef 残留后悬停误平移
-    window.addEventListener("pointerup", endDrag, { once: true });
-    window.addEventListener("pointercancel", endDrag, { once: true });
+    // 按下不捕获指针（会把节点 click 改道到容器），捕获推迟到越过阈值
   };
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = dragRef.current;
     const el = scrollRef.current;
     if (!d || !el || e.pointerId !== d.id) return;
+    // 指针在窗外/浏览器 UI 上松开时收不到 pointerup，buttons 归零兜底，
+    // 防止 dragRef 残留导致悬停误平移和对失效指针捕获
+    if (e.buttons === 0) {
+      endDrag(e.pointerId);
+      return;
+    }
     if (!movedRef.current) {
       // 越过阈值才开始平移并重锚起点；此前不动画面，click 保持有效
       if (Math.hypot(e.clientX - d.x, e.clientY - d.y) <= 4) return;
@@ -76,26 +93,27 @@ export function MindOverview({
     el.scrollLeft = d.left - (e.clientX - d.x);
     el.scrollTop = d.top - (e.clientY - d.y);
   };
-  const endDrag = () => {
-    dragRef.current = null;
-    setDragging(false);
-    // click 在 pointerup 之后同步派发，拖拽后的误点 click 要拦；
-    // 延迟一拍复位，不影响之后的触摸点按与键盘 Enter
-    window.setTimeout(() => {
-      movedRef.current = false;
-    }, 0);
-  };
 
-  // pointerup 被吞（窗口失焦等）时靠 lostpointercapture/blur 兜底，
-  // 否则 dragRef 残留，之后鼠标悬停也会平移、光标卡在 grabbing
+  // window 级持久监听（组件卸载统一清理，不随 pointerdown 累积）：
+  // 捕获前在容器外松开、窗口失焦等收不到容器事件的情况都在这里兜底
   useEffect(() => {
+    const onUp = (e: PointerEvent) => {
+      if (e.type === "pointercancel" || e.button === 0) endDrag(e.pointerId);
+    };
     const onBlur = () => {
       dragRef.current = null;
+      movedRef.current = false;
       setDragging(false);
     };
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     window.addEventListener("blur", onBlur);
-    return () => window.removeEventListener("blur", onBlur);
-  }, []);
+    return () => {
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [endDrag]);
 
   // 560px 断点按容器实际宽度走，而不是 window：概览嵌在正文栏里
   useEffect(() => {
@@ -168,9 +186,6 @@ export function MindOverview({
         className={`overflow-x-auto ${dragging ? "cursor-grabbing" : "cursor-grab"}`}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        onLostPointerCapture={endDrag}
         onClickCapture={(e) => {
           if (movedRef.current) {
             e.preventDefault();
