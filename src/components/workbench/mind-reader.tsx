@@ -44,6 +44,19 @@ export function MindReader({
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [selected, setSelected] = useState(target.node);
   const [focused, setFocused] = useState(target.node);
+  // 父级未必按 target 重挂载：切换文章后同步分支状态，避免沿用旧文章路径 id
+  const [seenTarget, setSeenTarget] = useState(target);
+  if (
+    seenTarget.revision !== target.revision ||
+    seenTarget.scope !== target.scope ||
+    seenTarget.node !== target.node
+  ) {
+    setSeenTarget(target);
+    setScope(target.scope);
+    setSelected(target.node);
+    setFocused(target.node);
+    setCollapsed(new Set());
+  }
   const [hovered, setHovered] = useState<string | null>(null);
   const refs = useRef(new Map<string, HTMLButtonElement>());
   const keyboardFocus = useRef(false);
@@ -61,7 +74,8 @@ export function MindReader({
     );
   }, [visible, scope, index]);
   const view = useMindViewport(viewportRef, layout, layoutKey, active, target.node);
-  const selectedNode = index.nodes.get(selected) ?? index.nodes.get(scope)!;
+  const selectedNode =
+    index.nodes.get(selected) ?? index.nodes.get(scope) ?? index.nodes.get(index.rootId)!;
   const hot = ancestorPath(index, hovered ?? selectedNode.id);
   const topics = (index.nodes.get(index.rootId)?.childIds ?? []).map((id) => index.nodes.get(id)!);
   const rootDepth = index.nodes.get(scope)?.depth ?? 0;
