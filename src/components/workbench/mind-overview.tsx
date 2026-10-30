@@ -79,7 +79,6 @@ export function MindOverview({
     if (e.pointerType === "mouse" && e.button !== 0) return;
     dragRef.current = { sx: e.clientX, sy: e.clientY, ox: pan.x, oy: pan.y };
     didDragRef.current = false;
-    e.currentTarget.setPointerCapture(e.pointerId);
   };
 
   const onPointerMove = (e: ReactPointerEvent<SVGSVGElement>) => {
@@ -87,7 +86,11 @@ export function MindOverview({
     if (!drag) return;
     const dx = e.clientX - drag.sx;
     const dy = e.clientY - drag.sy;
-    if (Math.abs(dx) + Math.abs(dy) > 3) didDragRef.current = true;
+    if (Math.abs(dx) + Math.abs(dy) > 3) {
+      // 达到拖拽阈值才捕获指针：按下即捕获会把 click 目标改到 svg，导致节点点击失效
+      if (!didDragRef.current) e.currentTarget.setPointerCapture(e.pointerId);
+      didDragRef.current = true;
+    }
     const rect = e.currentTarget.getBoundingClientRect();
     if (rect.width === 0) return;
     const scale = layout.width / rect.width;
