@@ -241,6 +241,18 @@ export default function StudioPage() {
     [refreshQueue],
   );
 
+  // 上传是页面内 XHR 直传：页面一走上传就断，服务端会把任务标成
+  // 「上传中断，文件不完整」。传输中关页/刷新前让浏览器确认一次。
+  useEffect(() => {
+    if (!activeUpload && waitingUploads.length === 0) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [activeUpload, waitingUploads]);
+
   useEffect(() => {
     const onDragEnter = (e: DragEvent) => {
       e.preventDefault();
@@ -257,7 +269,15 @@ export default function StudioPage() {
       dragDepth.current = 0;
       setDragging(false);
       const files = Array.from(e.dataTransfer?.files ?? []);
-      if (files.length > 0) startUpload(files);
+      if (files.length > 0) {
+        startUpload(files);
+        return;
+      }
+      // 有拖入动作但没有文件：多半是文件夹（dataTransfer.files 不含目录）
+      const items = e.dataTransfer?.items;
+      if (items && items.length > 0) {
+        setError("暂不支持文件夹，请拖入视频或音频文件");
+      }
     };
     window.addEventListener("dragenter", onDragEnter);
     window.addEventListener("dragover", onDragOver);
