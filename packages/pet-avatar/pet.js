@@ -16,7 +16,8 @@
   var ATLAS = { cols: 8, cellW: 192, cellH: 208, lookRowA: 9, lookRowB: 10, lookCount: 16 };
   var DEFAULT_FRAMES = [6, 8, 8, 4, 5, 8, 6, 6, 6];
   // rest：循环节之间的停顿（毫秒），一轮播完保持末帧不动，避免“一直在动”的观感。
-  // 业务状态（等待 / 跑动 / 检查）默认停 2s 上下；待机呼吸与拖拽跑动不停。
+  // 站立类业务状态（等待 / 检查）停 2s 上下；跑步（业务跑动与拖拽跑动）连续不停——
+  // 跑步中途定住看起来像卡顿，用户反馈过“跑步不流畅”。
   var ANIM = {
     idle:            { row: 0, fps: 6,  loop: true,  rest: 0    },
     "running-right": { row: 1, fps: 11, loop: true,  rest: 0    },
@@ -25,7 +26,7 @@
     jumping:         { row: 4, fps: 12, loop: false, rest: 0    },
     failed:          { row: 5, fps: 8,  loop: false, rest: 0    },
     waiting:         { row: 6, fps: 5,  loop: true,  rest: 2400 },
-    running:         { row: 7, fps: 10, loop: true,  rest: 2000 },
+    running:         { row: 7, fps: 10, loop: true,  rest: 0    },
     review:          { row: 8, fps: 6,  loop: true,  rest: 2200 }
   };
   // 宿主常用的“持久状态” → 图集动作行（working 借用 review 的检查姿态）
@@ -46,6 +47,8 @@
   var LOOK_TICK_MS = 140;
   var LOOK_DEADZONE = 18;    // 指针太靠近身体时保持原方向
   var EDGE = 4;
+  // 拖拽换向需要的累计动量（px）：来回蹭不到阈值就不换向，避免反复重播起手帧
+  var DRAG_TURN_PX = 12;
 
   function num(value, fallback) {
     var n = parseFloat(value);
@@ -795,10 +798,12 @@
       id: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
+      lastX: event.clientX,
       originX: this._x,
       originY: this._y,
       moved: false,
-      dir: 0
+      dir: 0,
+      momentum: 0
     };
     try { this._canvas.setPointerCapture(event.pointerId); } catch (e) { /* 老浏览器忽略 */ }
     this.setAttribute("data-dragging", "");
@@ -822,9 +827,17 @@
     this._y = drag.originY + dy;
     this._clampPosition();
 
-    var dir = dx > 0 ? "running-right" : dx < 0 ? "running-left" : "";
+    // 方向按「自上次换向起的净位移」判断，而不是相对起点的总位移或单步抖动：
+    // 同向连续拖不重播（不打断跑动循环），小来回蹭不动换向，跨过阈值才换。
+    // 净位移夹在 ±阈值：反向拖不必先抵消全部正向路程才回头，手感不钝。
+    drag.momentum = Math.max(-DRAG_TURN_PX, Math.min(DRAG_TURN_PX, drag.momentum + (event.clientX - drag.lastX)));
+    drag.lastX = event.clientX;
+    var dir = drag.momentum >= DRAG_TURN_PX ? "running-right"
+            : drag.momentum <= -DRAG_TURN_PX ? "running-left"
+            : "";
     if (dir && dir !== drag.dir) {
       drag.dir = dir;
+      drag.momentum = 0;
       this._play(dir, true);
     }
   };
