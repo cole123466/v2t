@@ -9,7 +9,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEve
 import type { MindIndex } from "@/lib/mind-model";
 import {
   ancestorPath,
-  estimateNodeBox,
+  estimateReaderBox,
   layoutMind,
   mindMove,
   visibleMind,
@@ -21,6 +21,7 @@ import {
   MIND_PADDING,
 } from "@/lib/mind-viewport";
 import { useMindViewport } from "@/hooks/use-mind-viewport";
+import { useMindReveal } from "@/hooks/use-mind-reveal";
 
 export type MindTarget = { scope: string; node: string; revision: number };
 
@@ -70,7 +71,7 @@ export function MindReader({
     return layoutMind(
       visible,
       scope,
-      new Map(visible.map((node) => [node.id, estimateNodeBox(node.label, node.depth - depth)])),
+      new Map(visible.map((node) => [node.id, estimateReaderBox(node.label, node.depth - depth)])),
     );
   }, [visible, scope, index]);
   const view = useMindViewport(viewportRef, layout, layoutKey, active, target.node);
@@ -80,6 +81,9 @@ export function MindReader({
   const topics = (index.nodes.get(index.rootId)?.childIds ?? []).map((id) => index.nodes.get(id)!);
   const rootDepth = index.nodes.get(scope)?.depth ?? 0;
   const viewSize = view.size.width > 0 ? view.size : { width: 1, height: 1 };
+  // 入场动画：树容器上的新节点/连线错峰 reveal
+  const treeRef = useRef<HTMLDivElement>(null);
+  useMindReveal(treeRef, active, layoutKey);
 
   // 换分支/重新进入由父级用 key={target.revision} 重挂载，
   // 初始聚焦经 useMindViewport 的 initialFocusId 完成，不走 effect setState
@@ -222,6 +226,7 @@ export function MindReader({
           >
             <div style={{ width: view.world.width, height: view.world.height }} className="relative">
               <div
+                ref={treeRef}
                 role="tree"
                 aria-label="概念关系"
                 onKeyDown={onKey}
@@ -243,6 +248,8 @@ export function MindReader({
                       d={wire.d}
                       pathLength={1}
                       fill="none"
+                      data-mind-enter="wire"
+                      data-mind-level={wire.depth - rootDepth}
                       className={hot.has(wire.id) ? "stroke-gold/50" : "stroke-tint/20"}
                       strokeWidth={1.5}
                     />
@@ -264,35 +271,44 @@ export function MindReader({
                       className="absolute"
                     >
                       <div className="relative size-full">
-                        <button
-                          type="button"
-                          role="treeitem"
-                          aria-label={node.label}
-                          aria-level={node.depth - rootDepth + 1}
-                          aria-selected={isSelected}
-                          aria-expanded={node.childIds.length ? open : undefined}
-                          aria-current={node.sectionId && node.sectionId === current ? "location" : undefined}
-                          tabIndex={focused === node.id ? 0 : -1}
-                          ref={(element) => {
-                            if (element) refs.current.set(node.id, element);
-                            else refs.current.delete(node.id);
-                          }}
-                          onMouseEnter={() => setHovered(node.id)}
-                          onFocus={() => {
-                            setFocused(node.id);
-                            setSelected(node.id);
-                          }}
-                          onClick={() => {
-                            setFocused(node.id);
-                            setSelected(node.id);
-                          }}
-                          className={
-                            "truncate rounded-lg border px-2 text-center text-[12px] leading-none transition-colors " +
-                            nodeClass(isScopeRoot, isSelected, hot.has(node.id))
-                          }
+                        {/* reveal 包一层：入场位移不能覆盖外层定位 translate */}
+                        <div
+                          data-mind-enter="node"
+                          data-mind-level={node.depth - rootDepth}
+                          data-mind-from={node.id === scope ? 0 : -1}
+                          className="size-full"
                         >
-                          {node.label}
-                        </button>
+                          <button
+                            type="button"
+                            role="treeitem"
+                            aria-label={node.label}
+                            aria-level={node.depth - rootDepth + 1}
+                            aria-selected={isSelected}
+                            aria-expanded={node.childIds.length ? open : undefined}
+                            aria-current={node.sectionId && node.sectionId === current ? "location" : undefined}
+                            tabIndex={focused === node.id ? 0 : -1}
+                            ref={(element) => {
+                              if (element) refs.current.set(node.id, element);
+                              else refs.current.delete(node.id);
+                            }}
+                            onMouseEnter={() => setHovered(node.id)}
+                            onFocus={() => {
+                              setFocused(node.id);
+                              setSelected(node.id);
+                            }}
+                            onClick={() => {
+                              setFocused(node.id);
+                              setSelected(node.id);
+                            }}
+                            className={
+                              "line-clamp-3 size-full overflow-hidden rounded-lg border px-3 py-2 text-left leading-[1.55] transition-colors " +
+                              (node.childIds.length ? "pr-7 " : "") +
+                              nodeClass(isScopeRoot, isSelected, hot.has(node.id))
+                            }
+                          >
+                            {node.label}
+                          </button>
+                        </div>
                         {node.childIds.length ? (
                           <button
                             type="button"

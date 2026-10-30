@@ -13,6 +13,7 @@ import {
   NARROW_BREAKPOINT,
 } from "@/lib/mind-model";
 import { MindReader, type MindTarget } from "./mind-reader";
+import { useMindReveal } from "@/hooks/use-mind-reveal";
 
 /**
  * 星形导图概览（对齐 vid-lens MindMap 交互）：
@@ -40,6 +41,10 @@ export function MindOverview({
   const [narrow, setNarrow] = useState(false);
   // 阅读弹层目标：scope=进入的分支，revision 驱动 MindReader 重聚焦
   const [target, setTarget] = useState<MindTarget | null>(null);
+  // 概览入场动画 + 弹层焦点管理
+  const diagramRef = useRef<SVGSVGElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
 
   const ref = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -130,6 +135,14 @@ export function MindOverview({
     return () => window.removeEventListener("keydown", onKey);
   }, [target]);
 
+  // 弹层焦点：打开时聚焦关闭按钮，关闭后还原到触发元素
+  useEffect(() => {
+    if (!target) return;
+    const prev = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+    return () => prev?.focus();
+  }, [target]);
+
   // 560px 断点按容器实际宽度走，而不是 window：概览嵌在正文栏里
   useEffect(() => {
     const el = ref.current;
@@ -157,6 +170,9 @@ export function MindOverview({
     () => ancestorPath(index, nodeForSection(index, activeSection)),
     [index, activeSection],
   );
+
+  // 概览入场动画：翻页/断点/数据变化后重放
+  useMindReveal(diagramRef, true, safePage + ":" + narrow + ":" + topicCount);
 
   const openReader = (scope?: string) => {
     const scopeId = scope ?? index.rootId;
@@ -221,6 +237,7 @@ export function MindOverview({
         }}
       >
         <svg
+          ref={diagramRef}
           role="img"
           aria-label="内容导图概览"
           viewBox={"0 0 " + layout.width + " " + layout.height}
@@ -231,7 +248,10 @@ export function MindOverview({
             <path
               key={edge.id}
               d={edge.path}
+              pathLength={1}
               fill="none"
+              data-mind-enter="wire"
+              data-mind-level={1}
               className="stroke-tint/20"
               strokeWidth={1.5}
             />
@@ -246,6 +266,9 @@ export function MindOverview({
                 key={node.id}
                 role="button"
                 tabIndex={0}
+                data-mind-enter="node"
+                data-mind-level={isRoot ? 0 : 1}
+                data-mind-from={isRoot ? 0 : node.x < layout.width / 2 ? 1 : -1}
                 aria-label={(isRoot ? "查看完整导图" : "阅读分支") + "：" + node.label}
                 onClick={jump}
                 onKeyDown={(e) => {
@@ -299,15 +322,35 @@ export function MindOverview({
       {target ? (
         createPortal(
         <div
+          ref={overlayRef}
           className="fixed inset-0 z-50 flex flex-col bg-ink-950/95 p-4 sm:p-8"
           role="dialog"
+          aria-modal="true"
           aria-label="内容导图阅读"
+          onKeyDown={(e) => {
+            // 焦点圈定：Tab 在弹层内循环，不漏到背景页面
+            if (e.key !== "Tab" || !overlayRef.current) return;
+            const focusables = overlayRef.current.querySelectorAll<HTMLElement>(
+              'button, select, [tabindex]:not([tabindex="-1"])',
+            );
+            if (!focusables.length) return;
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            if (e.shiftKey && document.activeElement === first) {
+              e.preventDefault();
+              last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+              e.preventDefault();
+              first.focus();
+            }
+          }}
         >
           <div className="flex items-center justify-between pb-3">
             <p className="min-w-0 truncate font-mono text-[10px] tracking-widest text-paper-faint">
               内容导图 · {title}
             </p>
             <button
+              ref={closeRef}
               type="button"
               onClick={() => setTarget(null)}
               className="shrink-0 rounded-lg border border-tint/10 p-1.5 text-paper-faint transition-colors hover:text-gold"

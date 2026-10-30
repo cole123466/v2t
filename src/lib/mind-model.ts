@@ -86,6 +86,19 @@ export function estimateNodeBox(label: string, depth: number): { w: number; h: n
   return { w, h };
 }
 
+/**
+ * 阅读器节点盒尺寸：按深度定宽、标签最多 3 行换行（对齐 vid-lens）。
+ * 与概览的单行 estimateNodeBox 分开，阅读器要的是可读性不是紧凑。
+ */
+export function estimateReaderBox(label: string, depth: number): { w: number; h: number } {
+  const w = depth === 0 ? 224 : depth === 1 ? 212 : 248;
+  const font = depth === 0 ? 16 : depth === 1 ? 15 : 14;
+  let units = 0;
+  for (const ch of label) units += ch.charCodeAt(0) > 0x2e7f ? 1 : 0.56;
+  const lines = Math.max(1, Math.min(3, Math.ceil((units * font) / (w - 42))));
+  return { w, h: Math.max(48, Math.ceil(lines * 24 + 20)) };
+}
+
 export interface MindOverviewNode {
   id: string;
   label: string;
