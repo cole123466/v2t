@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import {
   Archive,
   ArrowLeft,
@@ -101,11 +101,8 @@ function ProgressWave({ progress }: { progress: number }) {
 
 export default function TaskPage() {
   const { id } = useParams<{ id: string }>();
-  const router = useRouter();
   const searchParams = useSearchParams();
-  // 票 B：?view=workbench 表示用户明确要留在工作台，就绪后不自动跳阅读
-  const forceWorkbench = searchParams.get("view") === "workbench";
-  // 票 B：阅读视图点时间出处跳回工作台时带 ?t=，媒体就绪后定位一次
+  // 阅读视图点时间出处跳回工作台时带 ?t=，媒体就绪后定位一次
   const [initialSeek] = useState(() => {
     const t = Number(searchParams.get("t"));
     return Number.isFinite(t) && t > 0 ? t : 0;
@@ -137,13 +134,6 @@ export default function TaskPage() {
     es.onmessage = (e) => setTask(JSON.parse(e.data) as Task);
     return () => es.close();
   }, [id]);
-
-  // 票 B：就绪后默认进阅读视图（?view=workbench 除外）
-  useEffect(() => {
-    if (task?.status === "ready" && !forceWorkbench) {
-      router.replace("/task/" + id + "/read");
-    }
-  }, [task?.status, forceWorkbench, id, router]);
 
   // 从阅读视图带 ?t= 跳入：媒体元数据就绪后定位一次
   useEffect(() => {
@@ -259,7 +249,7 @@ export default function TaskPage() {
         {task.status === "ready" ? (
           <nav className="flex gap-1 rounded-2xl border border-tint/10 p-1" aria-label="视图切换">
             <Link
-              href={"/task/" + id + "?view=workbench"}
+              href={"/task/" + id}
               aria-current="page"
               className="rounded-xl bg-gold/10 px-3 py-1.5 font-mono text-[10px] tracking-wider text-gold"
             >
