@@ -8,7 +8,6 @@ import {
   FileText,
   Link2,
   Loader,
-  Maximize2,
   Printer,
   RotateCcw,
   X,
@@ -66,8 +65,6 @@ export function ArticlePanel({
   const [shareOpen, setShareOpen] = useState(false);
   // 阅读模式的导出下拉菜单开关
   const [exportMenu, setExportMenu] = useState(false);
-  // 全屏导图弹层（票 B）
-  const [mapFullOpen, setMapFullOpen] = useState(false);
   // 生成流的取消句柄：离开页面即中止，避免卸载后仍触发桌宠信号
   const abortRef = useRef<AbortController | null>(null);
   // 审稿旁栏「查看对应章节」的容器内定位句柄
@@ -77,15 +74,6 @@ export function ArticlePanel({
     return () => abortRef.current?.abort();
   }, []);
 
-  // 全屏导图：ESC 关闭
-  useEffect(() => {
-    if (!mapFullOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMapFullOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [mapFullOpen]);
 
   // 刷新恢复：挂载时若有进行中的文章，重新订阅其事件流（08 号票）
   useEffect(() => {
@@ -754,29 +742,16 @@ export function ArticlePanel({
           </p>
 
           {active.content.mindMap.length > 0 ? (
-            <div className="relative">
-              <MindOverview
-                nodes={active.content.mindMap}
-                title={active.content.title}
-                sectionIds={sectionIds}
-                activeSection={activeSection}
-                onJump={(sectionId) => {
-                  const container = contentRef.current;
-                  if (container) scrollToSection(container, sectionId);
-                }}
-              />
-              {readerMode ? (
-                <button
-                  type="button"
-                  onClick={() => setMapFullOpen(true)}
-                  className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-lg border border-tint/10 bg-ink-950/70 px-2 py-1 font-mono text-[10px] text-paper-faint transition-colors hover:border-gold/40 hover:text-gold"
-                  title="全屏查看内容导图"
-                >
-                  <Maximize2 className="size-3" strokeWidth={1.5} />
-                  全屏
-                </button>
-              ) : null}
-            </div>
+            <MindOverview
+              nodes={active.content.mindMap}
+              title={active.content.title}
+              sectionIds={sectionIds}
+              activeSection={activeSection}
+              onJump={(sectionId) => {
+                const container = contentRef.current;
+                if (container) scrollToSection(container, sectionId);
+              }}
+            />
           ) : null}
 
           <div className="mt-6 space-y-9">
@@ -884,41 +859,6 @@ export function ArticlePanel({
               {active.error}
             </p>
           ) : null}
-        </div>
-      ) : null}
-
-      {mapFullOpen && active?.content ? (
-        <div
-          className="fixed inset-0 z-50 flex flex-col bg-ink-950/95 p-4 sm:p-8"
-          role="dialog"
-          aria-label="内容导图全屏"
-        >
-          <div className="flex items-center justify-between pb-3">
-            <p className="min-w-0 truncate font-mono text-[10px] tracking-widest text-paper-faint">
-              内容导图 · {active.content.title}
-            </p>
-            <button
-              type="button"
-              onClick={() => setMapFullOpen(false)}
-              className="shrink-0 rounded-lg border border-tint/10 p-1.5 text-paper-faint transition-colors hover:text-gold"
-              aria-label="关闭全屏导图"
-            >
-              <X className="size-3.5" strokeWidth={1.5} />
-            </button>
-          </div>
-          <div className="min-h-0 flex-1">
-            <MindOverview
-              nodes={active.content.mindMap}
-              title={active.content.title}
-              sectionIds={sectionIds}
-              activeSection={activeSection}
-              onJump={(sectionId) => {
-                const container = contentRef.current;
-                if (container) scrollToSection(container, sectionId);
-                setMapFullOpen(false);
-              }}
-            />
-          </div>
         </div>
       ) : null}
 
