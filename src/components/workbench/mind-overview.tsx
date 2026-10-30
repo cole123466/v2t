@@ -41,7 +41,7 @@ export function MindOverview({
 
   // 鼠标按住拖拽平移（触摸端走原生滚动，不拦截）。拖过阈值后本次 click 作废，
   // 避免平移结束时误触节点跳转。
-  const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  const dragRef = useRef<{ id: number; x: number; y: number; left: number; top: number } | null>(null);
   const movedRef = useRef(false);
   const [dragging, setDragging] = useState(false);
 
@@ -49,14 +49,18 @@ export function MindOverview({
     if (e.pointerType !== "mouse" || e.button !== 0) return;
     const el = scrollRef.current;
     if (!el) return;
-    dragRef.current = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+    dragRef.current = { id: e.pointerId, x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
     movedRef.current = false;
     setDragging(true);
+    // 按下不捕获指针（会把节点 click 改道到容器），捕获推迟到越过阈值；
+    // 捕获前在容器外松开时靠 window 级兜底清理，防止 dragRef 残留后悬停误平移
+    window.addEventListener("pointerup", endDrag, { once: true });
+    window.addEventListener("pointercancel", endDrag, { once: true });
   };
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = dragRef.current;
     const el = scrollRef.current;
-    if (!d || !el) return;
+    if (!d || !el || e.pointerId !== d.id) return;
     if (!movedRef.current) {
       // 越过阈值才开始平移并重锚起点；此前不动画面，click 保持有效
       if (Math.hypot(e.clientX - d.x, e.clientY - d.y) <= 4) return;
