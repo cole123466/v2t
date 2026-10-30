@@ -300,17 +300,18 @@ describe("pet-avatar 清单编排", () => {
     expect(el.getState()).toEqual({ base: "working", animation: "review", busy: false });
   });
 
-  it("业务循环一轮播完留停顿，待机呼吸与拖拽跑动不停", async () => {
+  it("站立类业务循环播完留停顿，待机呼吸与跑步（业务/拖拽）不停", async () => {
     const el = makePet(BASE_MANIFEST);
     await flush();
     await flush();
 
-    // 业务状态默认停顿；待机呼吸、拖拽跑动保持连续
+    // 站立类业务状态默认停顿；待机呼吸、跑步保持连续（跑步定住像卡顿）
     expect(el._animOf("review").rest).toBe(2200);
-    expect(el._animOf("running").rest).toBe(2000);
+    expect(el._animOf("running").rest).toBe(0);
     expect(el._animOf("waiting").rest).toBe(2400);
     expect(el._animOf("idle").rest).toBe(0);
     expect(el._animOf("running-right").rest).toBe(0);
+    expect(el._animOf("running-left").rest).toBe(0);
 
     el.setState("working");
     for (let i = 0; i < el._frames[8]; i += 1) el._step(); // 播完一整轮
@@ -333,5 +334,49 @@ describe("pet-avatar 清单编排", () => {
     await flush();
     await flush();
     expect(el3._animOf("review").rest).toBe(2200);
+  });
+
+  it("拖拽换向按累计动量判断：同向不重播，小蹭不换向，跨阈值才换", async () => {
+    const el = makePet(BASE_MANIFEST);
+    await flush();
+    await flush();
+
+    let x = 100;
+    const down = { isPrimary: true, button: 0, pointerId: 1, clientX: x, clientY: 100, pointerType: "mouse", preventScroll: true, preventDefault() {}, stopPropagation() {} };
+    el._pointerDown(down);
+    expect(el._drag).not.toBeNull();
+
+    const move = (toX: number) =>
+      el._pointerMove({ ...down, clientX: toX, buttons: 1 });
+    const step = () => el._step();
+
+    // 向右拖过阈值 → running-right
+    move(x + 40);
+    expect(el._stateName).toBe("running-right");
+    // 继续同向拖：不重播（帧不归零，循环继续推进）
+    for (let i = 0; i < 3; i += 1) step();
+    const frameBefore = el._frame;
+    move(x + 80);
+    move(x + 120);
+    expect(el._stateName).toBe("running-right");
+    expect(el._frame).toBe(frameBefore);
+
+    // 反向小蹭（< 阈值）：不换向、不重播
+    move(x + 114);
+    move(x + 118);
+    expect(el._stateName).toBe("running-right");
+
+    // 反向跨过阈值 → 换 running-left（净位移夹在 ±阈值，反向不必抵消全部正向路程）
+    move(x + 90);
+    expect(el._stateName).toBe("running-left");
+
+    // 起手未越过移动阈值（5px）不触发拖拽
+    const el2 = makePet(BASE_MANIFEST);
+    await flush();
+    await flush();
+    el2._pointerDown({ ...down, pointerId: 2 });
+    el2._pointerMove({ ...down, pointerId: 2, clientX: 102, buttons: 1 });
+    expect(el2._drag.moved).toBe(false);
+    expect(el2._stateName).not.toBe("running-right");
   });
 });
