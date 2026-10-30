@@ -52,7 +52,6 @@ export function MindOverview({
     dragRef.current = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
     movedRef.current = false;
     setDragging(true);
-    e.currentTarget.setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = dragRef.current;
@@ -62,6 +61,8 @@ export function MindOverview({
       // 越过阈值才开始平移并重锚起点；此前不动画面，click 保持有效
       if (Math.hypot(e.clientX - d.x, e.clientY - d.y) <= 4) return;
       movedRef.current = true;
+      // 真正开始拖拽才捕获指针，按下时不吞节点 click
+      e.currentTarget.setPointerCapture(e.pointerId);
       d.x = e.clientX;
       d.y = e.clientY;
       d.left = el.scrollLeft;
