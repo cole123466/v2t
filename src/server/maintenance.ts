@@ -115,26 +115,47 @@ async function dirSize(root: string): Promise<number> {
   return total;
 }
 
-/** 存储统计：真实遍历 data 目录；媒体字节计 source.*、audio.mp3 与帧目录 */
-export async function storageStats(deps: MaintenanceDeps): Promise<StorageStats> {
-  const tasks = deps.store.list();
+/**
+ * 存储统计：真实遍历 data 目录；媒体字节计 source.*、audio.mp3 与帧目录。
+ * owner 缺省时统计全服（内部用途）；页面/接口传设备 id，只统计该设备可见的任务，
+ * 与任务列表的 owner 过滤保持同一口径，避免别的端看到别人的占用。
+ */
+export async function storageStats(
+  deps: MaintenanceDeps,
+  opts?: { owner?: string },
+): Promise<StorageStats> {
+  const tasks = deps.store.list(opts?.owner);
+  const ownedDirs = new Set(tasks.map((t) => t.id));
   const tasksRoot = path.join(deps.dataDir, "tasks");
   let mediaBytes = 0;
+  let totalBytes = 0;
   for (const e of await readdir(tasksRoot, { withFileTypes: true }).catch(() => [])) {
     if (!e.isDirectory()) continue;
     const dir = path.join(tasksRoot, e.name);
+    const owned = opts?.owner === undefined || ownedDirs.has(e.name);
     for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
       if (entry.isDirectory()) {
-        if (entry.name === "frames") mediaBytes += await dirSize(path.join(dir, entry.name));
+        if (entry.name === "frames") {
+          const size = await dirSize(path.join(dir, entry.name));
+          if (owned) mediaBytes += size;
+          if (owned) totalBytes += size;
+        }
       } else if (isMediaFile(entry.name)) {
-        mediaBytes += (await stat(path.join(dir, entry.name)).catch(() => null))?.size ?? 0;
+        const size = (await stat(path.join(dir, entry.name)).catch(() => null))?.size ?? 0;
+        if (owned) mediaBytes += size;
+        if (owned) totalBytes += size;
+      } else if (owned) {
+        totalBytes += (await stat(path.join(dir, entry.name)).catch(() => null))?.size ?? 0;
       }
     }
+  }
+  if (opts?.owner === undefined) {
+    totalBytes = await dirSize(deps.dataDir);
   }
   return {
     taskCount: tasks.length,
     purgedCount: tasks.filter((t) => t.mediaPurgedAt).length,
     mediaBytes,
-    totalBytes: await dirSize(deps.dataDir),
+    totalBytes,
   };
 }

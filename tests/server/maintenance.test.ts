@@ -29,10 +29,11 @@ interface Seed {
   ageDays?: number;
   files?: ("source" | "audio" | "transcript")[];
   sizes?: Record<string, number>;
+  owner?: string;
 }
 
 async function seed(s: Seed) {
-  const task = store.create({ originalName: s.name, ext: s.ext ?? ".mp4", sizeBytes: 100 });
+  const task = store.create({ originalName: s.name, ext: s.ext ?? ".mp4", sizeBytes: 100, owner: s.owner });
   if (s.status && s.status !== "queued") {
     store.update(task.id, { status: s.status });
   }
@@ -154,5 +155,20 @@ describe("存储统计", () => {
     expect(stats.totalBytes).toBeGreaterThan(stats.mediaBytes); // 还含 transcript 与 db 文件
     expect(stats.purgedCount).toBeGreaterThanOrEqual(1); // 上一组用例中 old.mp4 已清理
     expect(store.get(a.id)).toBeDefined();
+  });
+
+  it("按 owner 过滤：只统计该设备的任务目录，其他设备的不计入", async () => {
+    await seed({ name: "mine.mp4", status: "ready", files: ["source"], sizes: { source: 500 }, owner: "device-a" });
+    await seed({ name: "other.mp4", status: "ready", files: ["source"], sizes: { source: 9000 }, owner: "device-b" });
+
+    const stats = await storageStats(deps, { owner: "device-a" });
+
+    expect(stats.taskCount).toBe(1);
+    expect(stats.mediaBytes).toBe(500);
+    expect(stats.totalBytes).toBeLessThan(9000); // 不含 device-b 的 source
+    // 全量口径不受影响（内部用途）；同文件前面的用例已建了若干任务
+    const all = await storageStats(deps);
+    expect(all.taskCount).toBeGreaterThanOrEqual(2);
+    expect(all.mediaBytes).toBeGreaterThanOrEqual(9500);
   });
 });
