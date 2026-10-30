@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { MindMapNode } from "@/server/article";
 import {
@@ -296,6 +297,7 @@ export function MindOverview({
 
       {/* 分支阅读弹层：全屏覆盖，ESC/按钮关闭；定位章节先关弹层再滚动 */}
       {target ? (
+        createPortal(
         <div
           className="fixed inset-0 z-50 flex flex-col bg-ink-950/95 p-4 sm:p-8"
           role="dialog"
@@ -324,7 +326,9 @@ export function MindOverview({
               onJump(sectionId);
             }}
           />
-        </div>
+        </div>,
+        document.body,
+        )
       ) : null}
     </div>
   );
