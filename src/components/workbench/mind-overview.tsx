@@ -58,16 +58,39 @@ export function MindOverview({
     const d = dragRef.current;
     const el = scrollRef.current;
     if (!d || !el) return;
-    const dx = e.clientX - d.x;
-    const dy = e.clientY - d.y;
-    if (!movedRef.current && Math.hypot(dx, dy) > 4) movedRef.current = true;
-    el.scrollLeft = d.left - dx;
-    el.scrollTop = d.top - dy;
+    if (!movedRef.current) {
+      // 越过阈值才开始平移并重锚起点；此前不动画面，click 保持有效
+      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) <= 4) return;
+      movedRef.current = true;
+      d.x = e.clientX;
+      d.y = e.clientY;
+      d.left = el.scrollLeft;
+      d.top = el.scrollTop;
+      return;
+    }
+    el.scrollLeft = d.left - (e.clientX - d.x);
+    el.scrollTop = d.top - (e.clientY - d.y);
   };
   const endDrag = () => {
     dragRef.current = null;
     setDragging(false);
+    // click 在 pointerup 之后同步派发，拖拽后的误点 click 要拦；
+    // 延迟一拍复位，不影响之后的触摸点按与键盘 Enter
+    window.setTimeout(() => {
+      movedRef.current = false;
+    }, 0);
   };
+
+  // pointerup 被吞（窗口失焦等）时靠 lostpointercapture/blur 兜底，
+  // 否则 dragRef 残留，之后鼠标悬停也会平移、光标卡在 grabbing
+  useEffect(() => {
+    const onBlur = () => {
+      dragRef.current = null;
+      setDragging(false);
+    };
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, []);
 
   // 560px 断点按容器实际宽度走，而不是 window：概览嵌在正文栏里
   useEffect(() => {
@@ -142,6 +165,7 @@ export function MindOverview({
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
+        onLostPointerCapture={endDrag}
         onClickCapture={(e) => {
           if (movedRef.current) {
             e.preventDefault();
@@ -152,11 +176,9 @@ export function MindOverview({
         <svg
           role="img"
           aria-label="内容导图概览"
-          width={layout.width}
-          height={layout.height}
           viewBox={`0 0 ${layout.width} ${layout.height}`}
-          className="block select-none"
-          style={{ minWidth: "100%" }}
+          className="block w-full select-none"
+          style={{ minWidth: layout.width }}
         >
           {layout.edges.map((edge) => (
             <path
