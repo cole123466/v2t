@@ -76,7 +76,7 @@ export default function TaskReadPage() {
               阅读
             </span>
             <Link
-              href={"/task/" + id + "?view=workbench"}
+              href={"/task/" + id}
               className="rounded-xl px-3 py-1.5 font-mono text-[10px] tracking-wider text-paper-faint transition-colors hover:text-paper-dim"
             >
               工作台
@@ -111,7 +111,7 @@ export default function TaskReadPage() {
           readerMode
           defaultDetail={task.detailLevel}
           defaultPurpose={task.purpose}
-          onSeekOverride={(t) => router.push("/task/" + id + "?view=workbench&t=" + encodeURIComponent(String(t)))}
+          onSeekOverride={(t) => router.push("/task/" + id + "?t=" + encodeURIComponent(String(t)))}
         />
       </div>
 
