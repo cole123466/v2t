@@ -37,6 +37,37 @@ export function MindOverview({
   const [narrow, setNarrow] = useState(false);
 
   const ref = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 鼠标按住拖拽平移（触摸端走原生滚动，不拦截）。拖过阈值后本次 click 作废，
+  // 避免平移结束时误触节点跳转。
+  const dragRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
+  const movedRef = useRef(false);
+  const [dragging, setDragging] = useState(false);
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== "mouse" || e.button !== 0) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    dragRef.current = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+    movedRef.current = false;
+    setDragging(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    const el = scrollRef.current;
+    if (!d || !el) return;
+    const dx = e.clientX - d.x;
+    const dy = e.clientY - d.y;
+    if (!movedRef.current && Math.hypot(dx, dy) > 4) movedRef.current = true;
+    el.scrollLeft = d.left - dx;
+    el.scrollTop = d.top - dy;
+  };
+  const endDrag = () => {
+    dragRef.current = null;
+    setDragging(false);
+  };
 
   // 560px 断点按容器实际宽度走，而不是 window：概览嵌在正文栏里
   useEffect(() => {
@@ -104,13 +135,28 @@ export function MindOverview({
         ) : null}
       </div>
 
-      <div className="overflow-x-auto">
+      <div
+        ref={scrollRef}
+        className={`overflow-x-auto ${dragging ? "cursor-grabbing" : "cursor-grab"}`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onClickCapture={(e) => {
+          if (movedRef.current) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }}
+      >
         <svg
           role="img"
           aria-label="内容导图概览"
-          width="100%"
+          width={layout.width}
+          height={layout.height}
           viewBox={`0 0 ${layout.width} ${layout.height}`}
-          className="block"
+          className="block select-none"
+          style={{ minWidth: "100%" }}
         >
           {layout.edges.map((edge) => (
             <path
