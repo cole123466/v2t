@@ -136,4 +136,27 @@ describe("overviewMind 星形布局", () => {
     expect(open.nodes).toHaveLength(3);
     expect(closed.nodes).toHaveLength(2);
   });
+
+  it("画布按真实包围盒扩展：展开的子节点与长标签不再越界被裁", () => {
+    const input: MindMapNode[] = [
+      {
+        label: "分组标题很长很长很长",
+        children: [{ label: "超长子节点标签超长子节点标签超长子节点", sectionId: "s1" }],
+      },
+    ];
+    const index = indexTree(input, "t", sections);
+    const wide = overviewMind(index, new Set(), 0, false);
+    const narrow = overviewMind(index, new Set(), 0, true);
+    for (const layout of [wide, narrow]) {
+      for (const n of layout.nodes) {
+        expect(n.x - n.w / 2).toBeGreaterThanOrEqual(0);
+        expect(n.x + n.w / 2).toBeLessThanOrEqual(layout.width);
+        expect(n.y - n.h / 2).toBeGreaterThanOrEqual(0);
+        expect(n.y + n.h / 2).toBeLessThanOrEqual(layout.height);
+      }
+    }
+    // 根仍居中
+    expect(wide.nodes[0].x).toBeCloseTo(wide.width / 2);
+    expect(narrow.nodes[0].x).toBeCloseTo(narrow.width / 2);
+  });
 });

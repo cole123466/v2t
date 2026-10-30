@@ -908,6 +908,7 @@ export function ArticlePanel({
           </div>
           <div className="min-h-0 flex-1">
             <MindOverview
+              fullscreen
               nodes={active.content.mindMap}
               title={active.content.title}
               sectionIds={sectionIds}

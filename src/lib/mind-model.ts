@@ -145,7 +145,8 @@ export function overviewMind(
   );
 
   const nodes: MindOverviewNode[] = [];
-  const edges: MindOverviewEdge[] = [];
+  // 先记连线两端，坐标统一收口后再落路径：fitCanvas 会平移节点
+  const edgeSpecs: { id: string; fromId: string; toId: string; side: -1 | 0 | 1 }[] = [];
 
   if (narrow) {
     // 窄屏：根独占整行，主题两列网格竖排，连线三段折线
@@ -185,9 +186,10 @@ export function overviewMind(
         y,
         ...box,
       });
-      edges.push({ id: `${root.id}->${topic.id}`, path: elbowPath(nodes[0], nodes[nodes.length - 1]) });
+      edgeSpecs.push({ id: root.id + "->" + topic.id, fromId: root.id, toId: topic.id, side: 0 });
     });
-    return { nodes, edges, width, height };
+    const fitted = fitCanvas(nodes, width, height, false);
+    return { nodes, edges: buildEdges(edgeSpecs, nodes), ...fitted };
   }
 
   // 宽屏：根居中，主题左右分列，左侧 floor(n/2)
@@ -230,8 +232,7 @@ export function overviewMind(
         y,
         ...box,
       });
-      const node = nodes[nodes.length - 1];
-      edges.push({ id: `${root.id}->${topic.id}`, path: bezierPath(nodes[0], node, side) });
+      edgeSpecs.push({ id: root.id + "->" + topic.id, fromId: root.id, toId: topic.id, side });
       // 展开的主题：子节点缩进一列继续排
       if (!collapsed.has(topic.id)) {
         const children = topic.childIds.map((id) => index.nodes.get(id)!).filter(Boolean);
@@ -248,10 +249,7 @@ export function overviewMind(
             y: cy,
             ...childBox,
           });
-          edges.push({
-            id: `${topic.id}->${child.id}`,
-            path: bezierPath(node, nodes[nodes.length - 1], side),
-          });
+          edgeSpecs.push({ id: topic.id + "->" + child.id, fromId: topic.id, toId: child.id, side });
         });
       }
     });
@@ -259,9 +257,66 @@ export function overviewMind(
   place(left, -1);
   place(right, 1);
 
-  // 子节点可能超出按主题行数估算的高度，重新钳制画布
-  const maxY = Math.max(...nodes.map((n) => n.y + n.h / 2), 0);
-  return { nodes, edges, width, height: Math.max(height, maxY + 16) };
+  const fitted = fitCanvas(nodes, width, height, true);
+  return { nodes, edges: buildEdges(edgeSpecs, nodes), ...fitted };
+}
+
+/**
+ * 画布按节点真实包围盒扩展：根保持在画布水平中心（centerY 时垂直也居中），
+ * 越界内容通过扩画布容纳而不是裁掉——展开子节点、长标签不再把布局挤出视野。
+ * nodes[0] 必须是根；节点坐标原地平移到位。
+ */
+function fitCanvas(
+  nodes: MindOverviewNode[],
+  minW: number,
+  minH: number,
+  centerY: boolean,
+): { width: number; height: number } {
+  if (nodes.length === 0) return { width: minW, height: minH };
+  const root = nodes[0];
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const n of nodes) {
+    minX = Math.min(minX, n.x - n.w / 2);
+    maxX = Math.max(maxX, n.x + n.w / 2);
+    minY = Math.min(minY, n.y - n.h / 2);
+    maxY = Math.max(maxY, n.y + n.h / 2);
+  }
+  const pad = 16;
+  const halfW = Math.max(minW / 2, Math.max(root.x - minX, maxX - root.x) + pad);
+  const height = centerY
+    ? Math.max(minH, 2 * (Math.max(root.y - minY, maxY - root.y) + pad))
+    : Math.max(minH, maxY + pad);
+  const dx = halfW - root.x;
+  const dy = centerY ? height / 2 - root.y : 0;
+  if (dx !== 0 || dy !== 0) {
+    for (const n of nodes) {
+      n.x += dx;
+      n.y += dy;
+    }
+  }
+  return { width: halfW * 2, height };
+}
+
+/** 连线坐标收口后统一落路径；side 0 = 窄屏折线，±1 = 宽屏贝塞尔方向 */
+function buildEdges(
+  specs: { id: string; fromId: string; toId: string; side: -1 | 0 | 1 }[],
+  nodes: MindOverviewNode[],
+): MindOverviewEdge[] {
+  const byId = new Map(nodes.map((n) => [n.id, n] as const));
+  return specs.map(({ id, fromId, toId, side }) => {
+    const from = byId.get(fromId)!;
+    const to = byId.get(toId)!;
+    return {
+      id,
+      path:
+        side === 0
+          ? elbowPath(from, to)
+          : bezierPath(from, to, side),
+    };
+  });
 }
 
 /** 宽屏连线：三次贝塞尔，bend = max(24, Δx * 0.46) */
