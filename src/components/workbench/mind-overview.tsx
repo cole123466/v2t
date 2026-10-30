@@ -1,19 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { createPortal } from "react-dom";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { MindMapNode } from "@/server/article";
 import {
+  ancestorPath,
   indexTree,
+  nodeForSection,
   overviewMind,
   MIND_TOPICS_PER_PAGE,
   NARROW_BREAKPOINT,
 } from "@/lib/mind-model";
+import { MindReader, type MindTarget } from "./mind-reader";
 
 /**
- * 星形导图概览（06 号票 M1）：替换旧的灰字列表。
- * 根居中、主题左右分列，连线为贝塞尔曲线；
- * 分组节点点击展开/收起，叶子点击跳章节（滚动由父级容器的 scrollToSection 完成）。
+ * 星形导图概览（对齐 vid-lens MindMap 交互）：
+ * 概览只到主题层——点主题打开该分支的阅读弹层（MindReader），
+ * 点根节点或「查看完整导图」进入完整阅读器；定位章节由父级 onJump 完成。
  */
 export function MindOverview({
   nodes,
@@ -32,9 +36,10 @@ export function MindOverview({
     () => indexTree(nodes, title, new Set(sectionIds)),
     [nodes, title, sectionIds],
   );
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(0);
   const [narrow, setNarrow] = useState(false);
+  // 阅读弹层目标：scope=进入的分支，revision 驱动 MindReader 重聚焦
+  const [target, setTarget] = useState<MindTarget | null>(null);
 
   const ref = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -115,6 +120,16 @@ export function MindOverview({
     };
   }, [endDrag]);
 
+  // 阅读弹层：ESC 关闭
+  useEffect(() => {
+    if (!target) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setTarget(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [target]);
+
   // 560px 断点按容器实际宽度走，而不是 window：概览嵌在正文栏里
   useEffect(() => {
     const el = ref.current;
@@ -133,17 +148,19 @@ export function MindOverview({
   const safePage = Math.min(page, pageCount - 1);
 
   const layout = useMemo(
-    () => overviewMind(index, collapsed, safePage, narrow),
-    [index, collapsed, safePage, narrow],
+    () => overviewMind(index, safePage, narrow),
+    [index, safePage, narrow],
   );
 
-  const toggle = (id: string) => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  // 当前章节的热路径：所在概念及其祖先在概览上高亮
+  const hot = useMemo(
+    () => ancestorPath(index, nodeForSection(index, activeSection)),
+    [index, activeSection],
+  );
+
+  const openReader = (scope?: string) => {
+    const scopeId = scope ?? index.rootId;
+    setTarget((prev) => ({ scope: scopeId, node: scopeId, revision: (prev?.revision ?? 0) + 1 }));
   };
 
   return (
@@ -151,39 +168,49 @@ export function MindOverview({
       ref={ref}
       className="mt-5 rounded-xl border border-tint/5 bg-tint/[0.02] p-3"
     >
-      <div className="mb-2 flex items-center justify-between">
+      <div className="mb-2 flex items-center justify-between gap-2">
         <p className="font-mono text-[10px] tracking-widest text-paper-faint">内容导图</p>
-        {pageCount > 1 ? (
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              aria-label="上一组"
-              disabled={page === 0}
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              className="rounded-md border border-tint/10 p-0.5 text-paper-faint transition-colors hover:text-gold disabled:opacity-30"
-            >
-              <ChevronLeft className="size-3" strokeWidth={1.5} />
-            </button>
-            <span className="font-mono text-[10px] text-paper-faint">
-              {page * MIND_TOPICS_PER_PAGE + 1}–
-              {Math.min((page + 1) * MIND_TOPICS_PER_PAGE, topicCount)} / {topicCount}
-            </span>
-            <button
-              type="button"
-              aria-label="下一组"
-              disabled={page >= pageCount - 1}
-              onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-              className="rounded-md border border-tint/10 p-0.5 text-paper-faint transition-colors hover:text-gold disabled:opacity-30"
-            >
-              <ChevronRight className="size-3" strokeWidth={1.5} />
-            </button>
-          </div>
-        ) : null}
+        <div className="flex items-center gap-2">
+          {pageCount > 1 ? (
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label="上一组"
+                disabled={page === 0}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                className="rounded-md border border-tint/10 p-0.5 text-paper-faint transition-colors hover:text-gold disabled:opacity-30"
+              >
+                <ChevronLeft className="size-3" strokeWidth={1.5} />
+              </button>
+              <span className="font-mono text-[10px] text-paper-faint">
+                {page * MIND_TOPICS_PER_PAGE + 1}–
+                {Math.min((page + 1) * MIND_TOPICS_PER_PAGE, topicCount)} / {topicCount}
+              </span>
+              <button
+                type="button"
+                aria-label="下一组"
+                disabled={page >= pageCount - 1}
+                onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                className="rounded-md border border-tint/10 p-0.5 text-paper-faint transition-colors hover:text-gold disabled:opacity-30"
+              >
+                <ChevronRight className="size-3" strokeWidth={1.5} />
+              </button>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            onClick={() => openReader()}
+            className="rounded-md border border-tint/10 px-2 py-0.5 font-mono text-[10px] text-paper-faint transition-colors hover:border-gold/40 hover:text-gold"
+          >
+            查看完整导图 <span aria-hidden="true">↗</span>
+          </button>
+        </div>
       </div>
 
       <div
         ref={scrollRef}
-        className={`overflow-x-auto ${dragging ? "cursor-grabbing" : "cursor-grab"}`}
+        className={"overflow-x-auto " + (dragging ? "cursor-grabbing" : "cursor-grab")}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onClickCapture={(e) => {
@@ -196,7 +223,7 @@ export function MindOverview({
         <svg
           role="img"
           aria-label="内容导图概览"
-          viewBox={`0 0 ${layout.width} ${layout.height}`}
+          viewBox={"0 0 " + layout.width + " " + layout.height}
           className="block w-full select-none"
           style={{ minWidth: layout.width }}
         >
@@ -211,21 +238,15 @@ export function MindOverview({
           ))}
           {layout.nodes.map((node) => {
             const isRoot = node.depth === 0;
-            const hasChildren = node.sectionId === null;
             const active = node.sectionId !== null && node.sectionId === activeSection;
-            const jump = () => {
-              if (node.sectionId) {
-                onJump(node.sectionId);
-              } else if (!isRoot) {
-                toggle(node.id);
-              }
-            };
+            const isHot = hot.has(node.id);
+            const jump = () => openReader(isRoot ? undefined : node.id);
             return (
               <g
                 key={node.id}
-                role={isRoot ? undefined : "button"}
-                tabIndex={isRoot ? undefined : 0}
-                aria-expanded={hasChildren && !isRoot ? !collapsed.has(node.id) : undefined}
+                role="button"
+                tabIndex={0}
+                aria-label={(isRoot ? "查看完整导图" : "阅读分支") + "：" + node.label}
                 onClick={jump}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
@@ -233,7 +254,7 @@ export function MindOverview({
                     jump();
                   }
                 }}
-                className={isRoot ? "cursor-default" : "cursor-pointer"}
+                className="cursor-pointer"
               >
                 <rect
                   x={node.x - node.w / 2}
@@ -246,7 +267,9 @@ export function MindOverview({
                       ? "fill-gold/15 stroke-gold/40"
                       : active
                         ? "fill-gold/10 stroke-gold/60"
-                        : "fill-tint/[0.04] stroke-tint/15"
+                        : isHot
+                          ? "fill-tint/[0.04] stroke-gold/30"
+                          : "fill-tint/[0.04] stroke-tint/15"
                   }
                   strokeWidth={1}
                 />
@@ -260,29 +283,53 @@ export function MindOverview({
                       ? "fill-gold font-display text-[13px] font-semibold"
                       : active
                         ? "fill-gold text-[12px]"
-                        : hasChildren
-                          ? "fill-paper text-[12px]"
-                          : "fill-paper-dim text-[12px]"
+                        : "fill-paper-dim text-[12px]"
                   }
                 >
-                  {node.label.length > 16 ? `${node.label.slice(0, 15)}…` : node.label}
+                  {node.label.length > 16 ? node.label.slice(0, 15) + "…" : node.label}
                 </text>
-                {hasChildren && !isRoot ? (
-                  <text
-                    x={node.x + node.w / 2 - 10}
-                    y={node.y}
-                    textAnchor="middle"
-                    dominantBaseline="central"
-                    className="fill-paper-faint text-[10px]"
-                  >
-                    {collapsed.has(node.id) ? "…" : "–"}
-                  </text>
-                ) : null}
               </g>
             );
           })}
         </svg>
       </div>
+      <p className="mt-2 font-mono text-[10px] text-paper-faint/70">点主题阅读分支，选中概念可定位原文。</p>
+
+      {/* 分支阅读弹层：全屏覆盖，ESC/按钮关闭；定位章节先关弹层再滚动 */}
+      {target ? (
+        createPortal(
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-ink-950/95 p-4 sm:p-8"
+          role="dialog"
+          aria-label="内容导图阅读"
+        >
+          <div className="flex items-center justify-between pb-3">
+            <p className="min-w-0 truncate font-mono text-[10px] tracking-widest text-paper-faint">
+              内容导图 · {title}
+            </p>
+            <button
+              type="button"
+              onClick={() => setTarget(null)}
+              className="shrink-0 rounded-lg border border-tint/10 p-1.5 text-paper-faint transition-colors hover:text-gold"
+              aria-label="关闭导图阅读"
+            >
+              <X className="size-3.5" strokeWidth={1.5} />
+            </button>
+          </div>
+          <MindReader
+            index={index}
+            current={activeSection}
+            target={target}
+            active={target !== null}
+            onLocate={(sectionId) => {
+              setTarget(null);
+              onJump(sectionId);
+            }}
+          />
+        </div>,
+        document.body,
+        )
+      ) : null}
     </div>
   );
 }

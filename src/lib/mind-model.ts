@@ -125,7 +125,6 @@ const NARROW_BREAKPOINT = 560;
  */
 export function overviewMind(
   index: MindIndex,
-  collapsed: ReadonlySet<string>,
   page: number,
   narrow: boolean,
 ): MindOverviewLayout {
@@ -232,28 +231,6 @@ export function overviewMind(
       });
       const node = nodes[nodes.length - 1];
       edges.push({ id: `${root.id}->${topic.id}`, path: bezierPath(nodes[0], node, side) });
-      // 展开的主题：子节点缩进一列继续排
-      if (!collapsed.has(topic.id)) {
-        const children = topic.childIds.map((id) => index.nodes.get(id)!).filter(Boolean);
-        children.forEach((child, ci) => {
-          const childBox = estimateNodeBox(child.label, child.depth);
-          const cy = y + (ci - (children.length - 1) / 2) * (28 + 8);
-          const cx = x + side * (box.w / 2 + 24 + childBox.w / 2);
-          nodes.push({
-            id: child.id,
-            label: child.label,
-            sectionId: child.sectionId,
-            depth: child.depth,
-            x: cx,
-            y: cy,
-            ...childBox,
-          });
-          edges.push({
-            id: `${topic.id}->${child.id}`,
-            path: bezierPath(node, nodes[nodes.length - 1], side),
-          });
-        });
-      }
     });
   };
   place(left, -1);
@@ -281,3 +258,174 @@ function elbowPath(from: MindOverviewNode, to: MindOverviewNode): string {
 }
 
 export { NARROW_BREAKPOINT };
+
+/* ============================================================
+ * 分支阅读层（对齐 vid-lens MindReader）：可见节点、祖先路径、
+ * 树状布局、键盘导航。概览只到主题层，下钻阅读在这组函数上构建。
+ * ============================================================ */
+
+export interface MindBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface MindWire {
+  id: string;
+  depth: number;
+  d: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+const READER_GAP_X = 56;
+const READER_GAP_Y = 16;
+
+/** 深度优先展开（跳过收起分支）；Map 迭代序即 indexTree 的插入序 */
+export function visibleMind(
+  index: MindIndex,
+  collapsed: ReadonlySet<string>,
+  rootId: string = index.rootId,
+): MindNode[] {
+  const result: MindNode[] = [];
+  const walk = (id: string) => {
+    const node = index.nodes.get(id);
+    if (!node) return;
+    result.push(node);
+    if (!collapsed.has(id)) node.childIds.forEach(walk);
+  };
+  walk(rootId);
+  return result;
+}
+
+export function descendantCount(index: MindIndex, id: string): number {
+  return visibleMind(index, new Set(), id).length - 1;
+}
+
+/** 节点到根的路径（含自身），用于热路径高亮与面包屑 */
+export function ancestorPath(index: MindIndex, nodeId: string | null): Set<string> {
+  const path = new Set<string>();
+  const guard = new Set<string>();
+  let current = nodeId;
+  while (current && !guard.has(current)) {
+    guard.add(current);
+    path.add(current);
+    current = index.nodes.get(current)?.parentId ?? null;
+  }
+  return path;
+}
+
+/** 章节所属的第一个导图节点；找不到返回 null */
+export function nodeForSection(index: MindIndex, sectionId: string | null): string | null {
+  if (!sectionId) return null;
+  for (const [id, node] of index.nodes) {
+    if (node.sectionId === sectionId) return id;
+  }
+  return null;
+}
+
+/** 阅读器树状布局：根在左、子级向右缩进，父节点在子级跨度内垂直居中 */
+export function layoutMind(
+  visible: MindNode[],
+  rootId: string,
+  sizes: ReadonlyMap<string, { w: number; h: number }>,
+): { boxes: Map<string, MindBox>; wires: MindWire[]; width: number; height: number } {
+  const byId = new Map(visible.map((node) => [node.id, node]));
+  const boxes = new Map<string, MindBox>();
+  const sizeOf = (id: string): { w: number; h: number } => {
+    const hit = sizes.get(id);
+    if (hit) return hit;
+    const node = byId.get(id);
+    return estimateNodeBox(node?.label ?? "", node?.depth ?? 1);
+  };
+  const kidsOf = (id: string) =>
+    (byId.get(id)?.childIds ?? []).filter((child) => byId.has(child));
+  const extent = (id: string): number => {
+    const kids = kidsOf(id);
+    if (!kids.length) return sizeOf(id).h;
+    const sum = kids.reduce((total, child) => total + extent(child), 0) + READER_GAP_Y * (kids.length - 1);
+    return Math.max(sizeOf(id).h, sum);
+  };
+  const place = (id: string, x: number, top: number) => {
+    const box = sizeOf(id);
+    const span = extent(id);
+    boxes.set(id, { x, y: top + (span - box.h) / 2, w: box.w, h: box.h });
+    const kids = kidsOf(id);
+    if (!kids.length) return;
+    const kidsSpan = kids.reduce((total, child) => total + extent(child), 0) + READER_GAP_Y * (kids.length - 1);
+    let cursor = top + (span - kidsSpan) / 2;
+    for (const child of kids) {
+      place(child, x + box.w + READER_GAP_X, cursor);
+      cursor += extent(child) + READER_GAP_Y;
+    }
+  };
+  place(rootId, 16, 12);
+  let width = 32;
+  let height = 24;
+  for (const box of boxes.values()) {
+    width = Math.max(width, box.x + box.w + 28);
+    height = Math.max(height, box.y + box.h + 16);
+  }
+  const wires: MindWire[] = [];
+  for (const node of visible) {
+    if (!node.parentId) continue;
+    const parent = boxes.get(node.parentId);
+    const child = boxes.get(node.id);
+    if (!parent || !child) continue;
+    const x1 = parent.x + parent.w;
+    const y1 = parent.y + parent.h / 2;
+    const x2 = child.x;
+    const y2 = child.y + child.h / 2;
+    const bend = Math.max(24, (x2 - x1) * 0.46);
+    wires.push({
+      id: node.id,
+      depth: node.depth,
+      x1,
+      y1,
+      x2,
+      y2,
+      d: `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`,
+    });
+  }
+  return { boxes, wires, width, height };
+}
+
+export interface MindMove {
+  focus: string;
+  collapsed?: Set<string>;
+}
+
+/** 方向键导航：左右折叠/升层，上下同层可见序，Home/End 跳首尾 */
+export function mindMove(
+  focusedId: string,
+  key: string,
+  visible: MindNode[],
+  collapsed: ReadonlySet<string>,
+): MindMove | null {
+  const at = visible.findIndex((node) => node.id === focusedId);
+  const node = visible[at];
+  if (!node) return null;
+  if (key === "Home") return { focus: visible[0].id };
+  if (key === "End") return { focus: visible[visible.length - 1].id };
+  if (key === "ArrowDown" || key === "ArrowUp") {
+    const next = visible[at + (key === "ArrowDown" ? 1 : -1)];
+    return next ? { focus: next.id } : null;
+  }
+  if (key === "ArrowLeft") {
+    if (node.childIds.length && !collapsed.has(node.id)) {
+      return { focus: node.id, collapsed: new Set([...collapsed, node.id]) };
+    }
+    return node.parentId && visible.some((item) => item.id === node.parentId)
+      ? { focus: node.parentId }
+      : null;
+  }
+  if (key === "ArrowRight" && node.childIds.length) {
+    const next = new Set(collapsed);
+    next.delete(node.id);
+    return { focus: node.childIds[0], ...(collapsed.has(node.id) ? { collapsed: next } : {}) };
+  }
+  return null;
+}
