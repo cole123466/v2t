@@ -153,7 +153,7 @@ export function ArticleBlockView({
     case "paragraph":
       // 中文正文：稍大的字号 + 更松的行距 + 两端对齐，避免长段落"糊成一团"
       return (
-        <p className="text-[15px] leading-[1.9] text-paper-dim [text-align:justify] [text-justify:inter-ideograph]">
+        <p className="text-[15px] leading-[1.9] text-paper-dim lg:text-base [text-align:justify] [text-justify:inter-ideograph]">
           <InlineText text={block.text} times={times} onSeek={onSeek} />
         </p>
       );
