@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type RefObject } from "react";
+import { useEffect, useMemo, useState, type RefObject } from "react";
 
 /**
  * 滚动容器内的章节联动（06 号票 K3）。
@@ -58,39 +58,58 @@ export function scrollToSection(
 export function useContainerSpy(
   containerRef: RefObject<HTMLElement | null>,
   sectionIds: readonly string[],
+  /** 内容身份：同一批章节 id 的内容被整体替换时传入新身份（如调用方 useMemo 的 sectionIds 数组），触发重新测量 */
+  contentKey?: string | readonly string[],
 ): string | null {
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
 
+  // 调用方常在渲染期新建数组（map 结果、字面量），数组身份每次渲染都不同。
+  // 直接把它放进 effect 依赖，会让 effect 每次渲染都重订阅并立刻读一次 scrollTop，
+  // setState → 重渲染 → 再重订阅，叠到 50 层就是 Maximum update depth exceeded。
+  // 这里按「内容签名」锁定身份：章节 id 不变就不重订阅。
+  const sectionKey = sectionIds.join("\u0000");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 以 sectionKey 的值签名为准，内容相同即复用同一数组
+  const ids = useMemo(() => sectionIds, [sectionKey]);
+
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || sectionIds.length === 0) {
-      setActiveSection(null);
+    if (!container || ids.length === 0) {
+      // 函数式更新：值相同时复用旧 state，不额外触发重渲染
+      setActiveSection((prev) => (prev === null ? prev : null));
       return;
     }
     let raf = 0;
+    // 只取整像素：亚像素抖动（滚动锚定、平滑滚动、布局重排）会让每帧的值都「不相等」，
+    // 从而每帧都触发一次无意义的 setState；同值直接沿用旧 state 让 React 跳过渲染。
+    const syncScrollTop = () => {
+      const next = Math.round(container.scrollTop);
+      setScrollTop((prev) => (prev === next ? prev : next));
+    };
     const onScroll = () => {
       cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        setScrollTop(container.scrollTop);
-      });
+      raf = requestAnimationFrame(syncScrollTop);
     };
+    // 挂载 / 换文章时同步一次初值，之后只由 scroll 事件驱动，不随渲染重新订阅
     onScroll();
     container.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       cancelAnimationFrame(raf);
       container.removeEventListener("scroll", onScroll);
     };
-  }, [containerRef, sectionIds]);
+  }, [containerRef, ids]);
 
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || sectionIds.length === 0) {
-      setActiveSection(null);
+    if (!container || ids.length === 0) {
+      setActiveSection((prev) => (prev === null ? prev : null));
       return;
     }
-    setActiveSection(pickActiveSection(container, sectionIds, scrollTop));
-  }, [containerRef, sectionIds, scrollTop]);
+    const next = pickActiveSection(container, ids, scrollTop);
+    setActiveSection((prev) => (prev === next ? prev : next));
+    // contentKey 进依赖只为「文章内容被替换」时强制重测各章节偏移；
+    // 它本身不参与 pickActiveSection，避免每次渲染都重算。
+  }, [containerRef, ids, scrollTop, contentKey]);
 
   return activeSection;
 }
