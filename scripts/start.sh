@@ -47,6 +47,9 @@ fi
 command -v ffmpeg >/dev/null 2>&1 || warn "未找到 ffmpeg，抽取音频会失败"
 command -v ffprobe >/dev/null 2>&1 || warn "未找到 ffprobe，探测视频时长会失败"
 
+# 放宽 Node 请求体总时长限制：外网慢速上传大视频超过默认 5 分钟会被服务端掐断（见 patch-http-timeouts.cjs）
+export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--require $PWD/scripts/patch-http-timeouts.cjs"
+
 NEXT="./node_modules/.bin/next"
 [ -x "$NEXT" ] || fail "未找到 Next.js 可执行文件，请重新运行 scripts/setup.sh"
 
