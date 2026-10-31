@@ -164,9 +164,9 @@ describe("任务创建在队列已满时返回 429", () => {
         dataDir: dir,
       }),
     }));
-    const { POST } = await import("@/app/api/tasks/route");
+    const { POST } = await import("@/app/api/upload/route");
     const response = await POST(
-      new Request("http://localhost/api/tasks?name=full.mp4", {
+      new Request("http://localhost/api/upload?name=full.mp4", {
         method: "POST",
         headers: { "content-type": "application/octet-stream", "content-length": "4" },
         body: "data",

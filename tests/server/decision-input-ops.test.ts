@@ -59,10 +59,10 @@ describe("I1 tasks 默认两列（detail_level / purpose）", () => {
         dataDir: dir,
       }),
     }));
-    const { POST } = await import("@/app/api/tasks/route");
+    const { POST } = await import("@/app/api/upload/route");
     const response = await POST(
       new Request(
-        "http://localhost/api/tasks?name=a.mp4&detailLevel=concise&purpose=" +
+        "http://localhost/api/upload?name=a.mp4&detailLevel=concise&purpose=" +
           encodeURIComponent("聚焦成本"),
         {
           method: "POST",
@@ -88,9 +88,9 @@ describe("I1 tasks 默认两列（detail_level / purpose）", () => {
         dataDir: dir,
       }),
     }));
-    const { POST } = await import("@/app/api/tasks/route");
+    const { POST } = await import("@/app/api/upload/route");
     const response = await POST(
-      new Request("http://localhost/api/tasks?name=a.mp4&detailLevel=extreme", {
+      new Request("http://localhost/api/upload?name=a.mp4&detailLevel=extreme", {
         method: "POST",
         headers: { "content-type": "application/octet-stream", "content-length": "4" },
         body: "data",

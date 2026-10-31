@@ -51,5 +51,7 @@ function withDeviceCookie(header: string | null, device: string): string {
 }
 
 export const config = {
-  matcher: "/api/:path*",
+  // 排除 /api/upload：proxy 匹配到的请求会被 Next 克隆请求体（默认 10MB 截断），
+  // 大文件上传必须绕开克隆走纯流式，见 src/app/api/upload/route.ts。
+  matcher: "/api/((?!upload).*)",
 };
