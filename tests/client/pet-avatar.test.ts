@@ -341,7 +341,7 @@ describe("pet-avatar 清单编排", () => {
     await flush();
     await flush();
 
-    let x = 100;
+    const x = 100;
     const down = { isPrimary: true, button: 0, pointerId: 1, clientX: x, clientY: 100, pointerType: "mouse", preventScroll: true, preventDefault() {}, stopPropagation() {} };
     el._pointerDown(down);
     expect(el._drag).not.toBeNull();
