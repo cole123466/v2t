@@ -58,6 +58,8 @@ export function scrollToSection(
 export function useContainerSpy(
   containerRef: RefObject<HTMLElement | null>,
   sectionIds: readonly string[],
+  /** 内容身份：同一批章节 id 的内容被整体替换时传入新身份（如调用方 useMemo 的 sectionIds 数组），触发重新测量 */
+  contentKey?: string | readonly string[],
 ): string | null {
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -105,7 +107,9 @@ export function useContainerSpy(
     }
     const next = pickActiveSection(container, ids, scrollTop);
     setActiveSection((prev) => (prev === next ? prev : next));
-  }, [containerRef, ids, scrollTop]);
+    // contentKey 进依赖只为「文章内容被替换」时强制重测各章节偏移；
+    // 它本身不参与 pickActiveSection，避免每次渲染都重算。
+  }, [containerRef, ids, scrollTop, contentKey]);
 
   return activeSection;
 }

@@ -147,7 +147,9 @@ export function ArticlePanel({
     () => active?.content?.sections.map((s) => s.id) ?? [],
     [active],
   );
-  const activeSection = useContainerSpy(contentRef, sectionIds);
+  // 传 sectionIds 的数组身份作为 contentKey：文章内容被替换（切历史版本、流式重写同 id 文章）
+  // 时 useMemo 产出新数组，触发 spy 重新测量各章节偏移；普通重渲染身份不变，不会多余重算。
+  const activeSection = useContainerSpy(contentRef, sectionIds, sectionIds);
 
   const seek = (t: number) => {
     // 阅读视图没有播放器：时间出处点击交给宿主处理（跳工作台定位）
