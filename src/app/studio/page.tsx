@@ -122,7 +122,7 @@ export default function StudioPage() {
           detailLevel: detail,
           ...(purpose.trim() ? { purpose: purpose.trim() } : {}),
         });
-        xhr.open("POST", `/api/tasks?${query.toString()}`);
+        xhr.open("POST", `/api/upload?${query.toString()}`);
         xhr.setRequestHeader("content-type", "application/octet-stream");
         xhr.timeout = 30 * 60 * 1000;
         xhr.upload.onprogress = (e) => {

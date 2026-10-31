@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
+import { getPathMatch } from "next/dist/shared/lib/router/utils/path-match.js";
 import { config, proxy, resolveRequestId } from "@/proxy";
 import { requestId } from "@/server/request";
 
 describe("request id 代理", () => {
-  it("只匹配 /api/*", () => {
-    expect(config.matcher).toBe("/api/:path*");
+  it("匹配 /api/* 但排除 /api/upload（上传绕开 body 克隆走纯流式）", () => {
+    expect(config.matcher).toBe("/api/((?!upload).*)");
+    // 用 Next 编译 matcher 的同一实现验证，避免裸 RegExp 与 path-to-regexp 语义差异
+    const match = getPathMatch(config.matcher);
+    expect(match("/api/tasks")).toBeTruthy();
+    expect(match("/api/upload")).toBeFalsy();
+    expect(match("/api/upload/anything")).toBeFalsy();
+    expect(match("/api/uploads")).toBeFalsy();
   });
 
   it("没有请求头时生成 UUID 并写回响应头", () => {
