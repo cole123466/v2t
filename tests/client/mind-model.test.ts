@@ -3,6 +3,7 @@ import type { MindMapNode } from "@/server/article";
 import {
   ancestorPath,
   estimateNodeBox,
+  estimateReaderBox,
   indexTree,
   layoutMind,
   mindMove,
@@ -71,6 +72,25 @@ describe("estimateNodeBox", () => {
     expect(cjk.h).toBe(32);
     expect(estimateNodeBox("", 0).h).toBe(44);
     expect(estimateNodeBox("一".repeat(50), 1).w).toBeLessThanOrEqual(240);
+  });
+});
+
+describe("estimateReaderBox 阅读器盒尺寸", () => {
+  it("按深度定宽，长标签换行到最多 3 行，高度随行数增长", () => {
+    const short = estimateReaderBox("短", 2);
+    const long = estimateReaderBox("很".repeat(40), 2);
+    expect(short.w).toBe(248);
+    expect(long.w).toBe(248);
+    expect(long.h).toBeGreaterThan(short.h);
+    // 3 行封顶：再长也不会更高
+    const extreme = estimateReaderBox("超".repeat(80), 2);
+    expect(extreme.h).toBe(long.h);
+    expect(long.h).toBeGreaterThanOrEqual(48);
+  });
+
+  it("与概览的单行盒尺寸相互独立", () => {
+    const label = "某个中等长度的主题标签文字";
+    expect(estimateReaderBox(label, 1).w).not.toBe(estimateNodeBox(label, 1).w);
   });
 });
 
