@@ -60,11 +60,11 @@ export default function TaskReadPage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-4xl px-6 pb-10">
-      <header className="flex flex-wrap items-center justify-between gap-4 py-6">
+    <main className="mx-auto w-full max-w-6xl px-6 pb-10 lg:px-10">
+      <header className="flex flex-wrap items-center justify-between gap-4 py-8">
         <div className="min-w-0">
-          <h1 className="truncate font-display text-2xl font-semibold">{task.originalName}</h1>
-          <p className="mt-1 font-mono text-[11px] tracking-widest text-paper-faint">READ</p>
+          <h1 className="truncate font-display text-2xl font-semibold lg:text-[28px]">{task.originalName}</h1>
+          <p className="mt-1.5 font-mono text-[11px] tracking-widest text-paper-faint">READ</p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
           {/* 视图切换：阅读（本页）| 工作台 */}
@@ -104,7 +104,7 @@ export default function TaskReadPage() {
 
       <SourceNotice text={task.sourceNotice} />
 
-      <div className="h-[calc(100svh-190px)] min-h-[480px]">
+      <div className="h-[calc(100svh-206px)] min-h-[480px]">
         <ArticlePanel
           taskId={id}
           videoRef={videoRef}

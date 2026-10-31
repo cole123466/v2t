@@ -693,7 +693,7 @@ export function ArticlePanel({
       {active?.content ? (
         <div
           ref={contentRef}
-          className="glass relative min-h-0 flex-1 overflow-auto rounded-2xl p-6"
+          className="glass relative min-h-0 flex-1 overflow-auto rounded-2xl p-6 lg:p-10"
         >
           {onAskSection ? (
             <SelectionPopover
@@ -722,7 +722,7 @@ export function ArticlePanel({
             />
           ) : null}
           {/* 正文限宽：过宽的行长会让阅读跳行，正文区在宽屏下居中 */}
-          <div className="mx-auto w-full max-w-[44rem]">
+          <div className="mx-auto w-full max-w-[46rem]">
           {active.status === "streaming" ? (
             <p className="mb-4 flex items-center gap-2 rounded-xl border border-gold/20 bg-gold/5 px-3 py-2 font-mono text-[10px] tracking-wider text-gold/90">
               <Loader className="size-3 animate-spin" strokeWidth={1.5} />
@@ -754,15 +754,15 @@ export function ArticlePanel({
             />
           ) : null}
 
-          <div className="mt-6 space-y-9">
+          <div className="mt-8 space-y-12">
             {active.content.sections.map((section, index) => (
               <section
                 key={section.id}
                 id={`section-${section.id}`}
                 data-section-id={section.id}
-                className={`scroll-mt-4 ${index > 0 ? "border-t border-tint/[0.07] pt-8" : ""}`}
+                className={`scroll-mt-4 ${index > 0 ? "border-t border-tint/[0.07] pt-10" : ""}`}
               >
-                <h3 className="flex items-baseline gap-2.5 font-display text-[19px] font-semibold leading-snug text-paper">
+                <h3 className="flex items-baseline gap-2.5 font-display text-[20px] font-semibold leading-snug text-paper">
                   <span className="font-mono text-[11px] tracking-widest text-gold/80">
                     {String(index + 1).padStart(2, "0")}
                   </span>
@@ -874,8 +874,8 @@ export function ArticlePanel({
 
   // 阅读模式（票 B）：≥xl 右栏挂章节目录，正文保持居中限宽
   return readerMode ? (
-    <div className="flex h-full min-h-[420px] items-stretch gap-6">
-      <div className="flex min-w-0 flex-1 flex-col gap-4">{body}</div>
+    <div className="flex h-full min-h-[420px] items-stretch gap-8 xl:gap-12">
+      <div className="flex min-w-0 flex-1 flex-col gap-5">{body}</div>
       {active?.content && active.content.sections.length > 0 ? (
         <aside
           aria-label="章节目录"
