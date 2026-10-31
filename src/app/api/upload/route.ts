@@ -70,11 +70,16 @@ export async function POST(req: Request) {
     );
   }
 
+  // /api/upload 不在 proxy matcher 内，proxy 下发的设备标识可能缺失：owner 为空的任务
+  // 会被 /api/tasks 的 claimLegacy 认领给最先轮询的设备，导致上传内容跨设备可见。
+  const owner = deviceOwner(req);
+  if (!owner) return fail("缺少设备标识，请刷新页面后重试", 400);
+
   const task = store.create({
     originalName,
     ext,
     sizeBytes,
-    owner: deviceOwner(req),
+    owner,
     detailLevel: options.detailLevel,
     purpose: options.purpose,
   });
@@ -137,4 +142,3 @@ export async function POST(req: Request) {
   });
   return Response.json(task, { status: 201 });
 }
-
