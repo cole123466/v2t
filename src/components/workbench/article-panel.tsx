@@ -516,6 +516,35 @@ export function ArticlePanel({
               </span>
             </div>
           ) : null}
+
+          {/* 深度与关注点（票 A 后回归阅读页）：生成前选定，任务页内即可调整，不必回导入页 */}
+          <div className="shrink-0 border-t border-tint/[0.07] pt-3">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <div className="flex gap-1.5">
+                {DETAIL_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setDetail(opt.value)}
+                    title={opt.hint}
+                    className={`rounded-lg border px-2.5 py-1 font-mono text-[10px] transition-colors ${
+                      detail === opt.value
+                        ? "border-gold/40 bg-gold/10 text-gold"
+                        : "border-tint/10 text-paper-faint hover:text-paper-dim"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <input
+                value={purpose}
+                onChange={(e) => setPurpose(e.target.value.slice(0, 500))}
+                placeholder="本次关注点（可选，≤500 字）"
+                className="min-w-0 flex-1 rounded-xl border border-tint/10 bg-ink-950/60 px-3 py-1.5 text-xs text-paper outline-none transition-colors placeholder:text-paper-faint focus:border-gold/50"
+              />
+            </div>
+          </div>
         </>
       ) : (
       <div className="glass rounded-2xl p-4">
