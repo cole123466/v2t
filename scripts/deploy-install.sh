@@ -15,8 +15,10 @@ for f in v2t-dev.service v2t-deploy.service v2t-deploy.timer; do
   chmod 644 "$unit_dir/$f"
 done
 
-# drop-in：v2t-dev 的重启限流（deploy/v2t-dev.service.d/ 下所有 conf）
+# drop-in：v2t-dev 的重启限流（deploy/v2t-dev.service.d/ 下所有 conf）。
+# 同步语义：先清掉目标目录里仓库已不存在/改名的 conf，避免旧限流配置残留 /etc 继续生效
 mkdir -p "$unit_dir/v2t-dev.service.d"
+find "$unit_dir/v2t-dev.service.d" -maxdepth 1 -name '*.conf' -exec rm -f {} +
 for f in "$here"/deploy/v2t-dev.service.d/*.conf; do
   [ -e "$f" ] || continue
   cp "$f" "$unit_dir/v2t-dev.service.d/$(basename "$f")"
@@ -40,12 +42,14 @@ if [ -n "$pid" ] && ! systemctl is-active --quiet v2t-dev.service; then
   echo "接管步骤（必须等空闲时手动做）："
   echo "  1) scripts/deploy-sync.sh --dry-run     # 只应剩「4317 被旧进程占用」这一个延后项"
   echo "  2) kill -TERM -- -$sid                  # 结束后确认 4317 已释放"
-  echo "  3) systemctl start v2t-dev"
+  echo "  3) systemctl reset-failed v2t-dev 2>/dev/null; systemctl start v2t-dev"
+  # reset-failed：限流（60s 内 4 次）触发后 unit 处于 failed，不先清就 start 会报 repeated too quickly
   echo "  4) scripts/deploy-sync.sh --dry-run     # 应输出 DRY-RUN ready（下一次 timer 会补一次重启）"
 else
   echo "4317 空闲，或已由 v2t-dev.service 托管。"
   echo "  1) scripts/deploy-sync.sh --dry-run"
-  echo "  2) systemctl start v2t-dev"
+  echo "  2) systemctl reset-failed v2t-dev 2>/dev/null; systemctl start v2t-dev"
+  # reset-failed：限流触发后 unit 是 failed 态，直接 start 会报 repeated too quickly
 fi
 echo
 echo "可选配置：/etc/v2t-deploy.conf（DEPLOY_* 变量，见 scripts/deploy-sync.sh 顶部）。"

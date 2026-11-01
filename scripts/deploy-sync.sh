@@ -25,7 +25,7 @@ set -euo pipefail
 # 失败退出，而此时旧进程已停服——安全网必须先于任何加载逻辑注册。
 # DRY_RUN（在 main 里置位）时不动服务；正常结束时 is-active 短路，等于 no-op。
 if [ "${DEPLOY_RESUME:-0}" = "1" ]; then
-  trap 'if [ "${DRY_RUN:-0}" != "1" ]; then systemctl is-active --quiet "${DEPLOY_SERVICE:-v2t-dev.service}" 2>/dev/null || systemctl start "${DEPLOY_SERVICE:-v2t-dev.service}" >/dev/null 2>&1 || true; fi' EXIT
+  trap 'if [ "${DRY_RUN:-0}" != "1" ]; then systemctl is-active --quiet "${DEPLOY_SERVICE:-v2t-dev.service}" 2>/dev/null || { systemctl reset-failed "${DEPLOY_SERVICE:-v2t-dev.service}" 2>/dev/null; systemctl start "${DEPLOY_SERVICE:-v2t-dev.service}" >/dev/null 2>&1 || true; }; fi' EXIT
 fi
 
 CONFIG=${DEPLOY_CONFIG:-/etc/v2t-deploy.conf}
@@ -111,7 +111,7 @@ rollback() {
   # reset 是空操作且「已回滚」通知是误导：显式报无法自动回滚，尽力拉起当前版本
   if [ "$prev" = "$target" ]; then
     log "CRITICAL 部署失败：$reason，且无上一个健康版本可回滚，尽力拉起当前版本"
-    systemctl start "$SERVICE" >/dev/null 2>&1 || true
+    systemctl reset-failed "$SERVICE" 2>/dev/null; systemctl start "$SERVICE" >/dev/null 2>&1 || true
     if wait_health; then
       # 冷编译可能超过健康窗口但服务最终能起来：恢复健康就恢复正常轮转，
       # 不留 broken/FAILED_SHA 把后续部署挡在门外
@@ -153,7 +153,7 @@ rollback() {
   log "清除 .next（回滚后防 HMR 刷新循环）"
   rm -rf "$REPO/.next" || log "清除 .next 失败（忽略，继续启动）"
 
-  systemctl start "$SERVICE" >/dev/null 2>&1 || log "CRITICAL 回滚后启动失败"
+  systemctl reset-failed "$SERVICE" 2>/dev/null; systemctl start "$SERVICE" >/dev/null 2>&1 || log "CRITICAL 回滚后启动失败"
 
   if wait_health; then
     DEPLOYED_SHA=$prev
@@ -199,7 +199,7 @@ deploy() {
     sleep 0.5
   done
   if port_in_use; then
-    systemctl start "$SERVICE" >/dev/null 2>&1 || true
+    systemctl reset-failed "$SERVICE" 2>/dev/null; systemctl start "$SERVICE" >/dev/null 2>&1 || true
     defer "$APP_PORT 端口仍被占用（旧 nohup 进程未接管？先按 deploy-install.sh 的提示 takeover）"
   fi
 
@@ -207,13 +207,13 @@ deploy() {
   local busy
   busy=$(app_busy)
   if [ "$busy" != "0" ]; then
-    systemctl start "$SERVICE" >/dev/null 2>&1 || true
+    systemctl reset-failed "$SERVICE" 2>/dev/null; systemctl start "$SERVICE" >/dev/null 2>&1 || true
     defer "停服后发现应用队列有 $busy 个任务，已恢复服务"
   fi
 
   if [ "$restart_only" = "0" ]; then
     if ! git -C "$REPO" merge --ff-only "$target" >/dev/null 2>&1; then
-      systemctl start "$SERVICE" >/dev/null 2>&1 || true
+      systemctl reset-failed "$SERVICE" 2>/dev/null; systemctl start "$SERVICE" >/dev/null 2>&1 || true
       defer "git merge --ff-only 失败（工作区被并发修改？）"
     fi
   fi
@@ -250,6 +250,7 @@ deploy() {
   rm -rf "$REPO/.next" && log ".next 已清除" || log "清除 .next 失败（忽略，继续启动）"
   [ ! -d "$REPO/.next" ] || log "警告：.next 清除后仍存在，检查磁盘/权限"
 
+  systemctl reset-failed "$SERVICE" 2>/dev/null || true
   if ! systemctl start "$SERVICE" >/dev/null 2>&1; then
     rollback "$prev" "$target" "systemctl start 失败" "$lock_changed"
   fi
@@ -409,7 +410,7 @@ main() {
     # resume 期间服务是停着的：任何未预期退出都先把服务拉起来
     # （正常结束时服务已在跑，is-active 短路，等于 no-op）
     # 注意：trap 必须在 DRY_RUN 早退之后注册，否则 dry-run 会真的启动服务
-    trap 'systemctl is-active --quiet "$SERVICE" 2>/dev/null || systemctl start "$SERVICE" >/dev/null 2>&1 || true' EXIT
+    trap 'systemctl is-active --quiet "$SERVICE" 2>/dev/null || { systemctl reset-failed "$SERVICE" 2>/dev/null; systemctl start "$SERVICE" >/dev/null 2>&1 || true; }' EXIT
     # 握手一致性：运行中的脚本必须就是 HEAD 里的版本，否则环境变量可能
     # 来自已被覆盖的旧流程，resume 语义不可信
     local self_rel=${BASH_SOURCE[0]#$REPO/}
@@ -420,7 +421,7 @@ main() {
     local resumed_sha prev_sha
     resumed_sha=$(git -C "$REPO" rev-parse HEAD) || {
       # resume 阶段服务是停着的：任何早退都必须先把服务拉起来
-      systemctl start "$SERVICE" >/dev/null 2>&1 || true
+      systemctl reset-failed "$SERVICE" 2>/dev/null; systemctl start "$SERVICE" >/dev/null 2>&1 || true
       log "CRITICAL resume 读 HEAD 失败，已按当前工作区重启服务"
       exit 1
     }
