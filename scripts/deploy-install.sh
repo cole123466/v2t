@@ -15,17 +15,26 @@ for f in v2t-dev.service v2t-deploy.service v2t-deploy.timer; do
   chmod 644 "$unit_dir/$f"
 done
 
+# drop-in：v2t-dev 的重启限流（deploy/v2t-dev.service.d/ 下所有 conf）
+mkdir -p "$unit_dir/v2t-dev.service.d"
+for f in "$here"/deploy/v2t-dev.service.d/*.conf; do
+  [ -e "$f" ] || continue
+  cp "$f" "$unit_dir/v2t-dev.service.d/$(basename "$f")"
+  chmod 644 "$unit_dir/v2t-dev.service.d/$(basename "$f")"
+done
+
 mkdir -p /var/lib/v2t-deploy
 systemctl daemon-reload
 systemctl enable v2t-dev.service >/dev/null
 systemctl enable --now v2t-deploy.timer >/dev/null
 
 echo "已安装：v2t-dev.service / v2t-deploy.service / v2t-deploy.timer"
+echo "已安装 v2t-dev 重启限流 drop-in（60s 内最多 4 次启动，RestartSec=5s）。"
 echo "timer 已启动，每 2 分钟检查一次 origin/main（有任务时只记日志、不部署）。"
 echo
 
 pid=$(ss -ltnp "sport = :4317" 2>/dev/null | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -1)
-if [ -n "$pid" ]; then
+if [ -n "$pid" ] && ! systemctl is-active --quiet v2t-dev.service; then
   sid=$(ps -o sid= -p "$pid" | tr -d ' ')
   echo "当前 4317 仍由旧进程（PID $pid，会话 $sid）占用，所以自动部署会一直延后。"
   echo "接管步骤（必须等空闲时手动做）："
@@ -34,7 +43,7 @@ if [ -n "$pid" ]; then
   echo "  3) systemctl start v2t-dev"
   echo "  4) scripts/deploy-sync.sh --dry-run     # 应输出 DRY-RUN ready（下一次 timer 会补一次重启）"
 else
-  echo "4317 空闲。"
+  echo "4317 空闲，或已由 v2t-dev.service 托管。"
   echo "  1) scripts/deploy-sync.sh --dry-run"
   echo "  2) systemctl start v2t-dev"
 fi
