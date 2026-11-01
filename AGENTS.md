@@ -16,8 +16,8 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 - 类型标签（五选一）：`bug`（缺陷）、`enhancement`（新功能）、`chore`（工程杂务/构建/依赖/lint）、`documentation`（文档）、`test`（测试）
 - 风险等级标签（三选一，与自动审查 tiering 对齐）：
-  - `risk/tier1`：纯文档/测试/锁文件，验证通过可自动合并
-  - `risk/tier2`：常规业务代码，零 Critical 且验证通过可自动合并
-  - `risk/tier3`：涉及 src/server/db.ts、src/server/owner.ts、数据库 migration、scripts/ci.sh，或变更超阈值——严禁自动通过，必须人工确认
+  - `tier1`：纯文档/测试/锁文件，验证通过可自动合并
+  - `tier2`：常规业务代码，零 Critical 且验证通过可自动合并
+  - `tier3`：涉及 src/server/db.ts、src/server/owner.ts、数据库 migration、scripts/ci.sh，或变更超阈值——严禁自动通过，必须人工确认
 
 不确定风险等级时按高一级处理。issue poller 依赖标签与 open 状态捕获入队（见 agent/issues/poller.ts）。
