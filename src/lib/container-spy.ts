@@ -45,21 +45,30 @@ export function scrollToSection(
   container: HTMLElement,
   sectionId: string,
   behavior: ScrollBehavior = "smooth",
+  /** window 模式：容器不滚、整页滚（阅读视图去卡片化），定位改走 window.scrollTo */
+  windowScroll = false,
 ): void {
   const offset = measureSection(container, sectionId);
   if (offset === null) return;
+  if (windowScroll) {
+    const top = container.getBoundingClientRect().top + window.scrollY + offset - SECTION_ANCHOR_OFFSET;
+    window.scrollTo({ top: Math.max(0, top), behavior });
+    return;
+  }
   container.scrollTo({ top: Math.max(0, offset - SECTION_ANCHOR_OFFSET), behavior });
 }
 
 /**
  * 监听滚动容器的 scrollTop，返回当前阅读位对应的章节。
  * 导图概览与章节目录共用同一份 activeSection，不各算一遍。
+ * windowScroll=true 时容器本身不滚（阅读视图整页流式），改监听 window 滚动。
  */
 export function useContainerSpy(
   containerRef: RefObject<HTMLElement | null>,
   sectionIds: readonly string[],
   /** 内容身份：同一批章节 id 的内容被整体替换时传入新身份（如调用方 useMemo 的 sectionIds 数组），触发重新测量 */
   contentKey?: string | readonly string[],
+  windowScroll = false,
 ): string | null {
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -83,7 +92,10 @@ export function useContainerSpy(
     // 只取整像素：亚像素抖动（滚动锚定、平滑滚动、布局重排）会让每帧的值都「不相等」，
     // 从而每帧都触发一次无意义的 setState；同值直接沿用旧 state 让 React 跳过渲染。
     const syncScrollTop = () => {
-      const next = Math.round(container.scrollTop);
+      // window 模式：整页滚动量减去容器顶的文档绝对位置 = 相对容器顶的滚动量，pickActiveSection 语义不变
+      const next = Math.round(
+        windowScroll ? window.scrollY - (container.getBoundingClientRect().top + window.scrollY) : container.scrollTop,
+      );
       setScrollTop((prev) => (prev === next ? prev : next));
     };
     const onScroll = () => {
@@ -92,12 +104,13 @@ export function useContainerSpy(
     };
     // 挂载 / 换文章时同步一次初值，之后只由 scroll 事件驱动，不随渲染重新订阅
     onScroll();
-    container.addEventListener("scroll", onScroll, { passive: true });
+    const scrollTarget: HTMLElement | Window = windowScroll ? window : container;
+    scrollTarget.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       cancelAnimationFrame(raf);
-      container.removeEventListener("scroll", onScroll);
+      scrollTarget.removeEventListener("scroll", onScroll);
     };
-  }, [containerRef, ids]);
+  }, [containerRef, ids, windowScroll]);
 
   useEffect(() => {
     const container = containerRef.current;

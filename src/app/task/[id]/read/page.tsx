@@ -104,16 +104,14 @@ export default function TaskReadPage() {
 
       <SourceNotice text={task.sourceNotice} />
 
-      <div className="h-[calc(100svh-206px)] min-h-[480px]">
-        <ArticlePanel
-          taskId={id}
-          videoRef={videoRef}
-          readerMode
-          defaultDetail={task.detailLevel}
-          defaultPurpose={task.purpose}
-          onSeekOverride={(t) => router.push("/task/" + id + "?t=" + encodeURIComponent(String(t)))}
-        />
-      </div>
+      <ArticlePanel
+        taskId={id}
+        videoRef={videoRef}
+        readerMode
+        defaultDetail={task.detailLevel}
+        defaultPurpose={task.purpose}
+        onSeekOverride={(t) => router.push("/task/" + id + "?t=" + encodeURIComponent(String(t)))}
+      />
 
       {/* 生成过程抽屉：阅读页保持干净，过程按需展开 */}
       {processOpen ? (
