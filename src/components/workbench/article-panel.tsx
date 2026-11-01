@@ -758,8 +758,8 @@ export function ArticlePanel({
               }}
             />
           ) : null}
-          {/* 正文限宽：过宽的行长会让阅读跳行，正文区在宽屏下居中 */}
-          <div className="mx-auto w-full max-w-[46rem]">
+          {/* 正文限宽：52rem 是长文档阅读的舒适上限，过宽会跳行；正文区在宽屏下居中 */}
+          <div className="mx-auto w-full max-w-[52rem]">
           {active.status === "streaming" ? (
             <p className="mb-4 flex items-center gap-2 rounded-xl border border-gold/20 bg-gold/5 px-3 py-2 font-mono text-[10px] tracking-wider text-gold/90">
               <Loader className="size-3 animate-spin" strokeWidth={1.5} />
@@ -919,7 +919,7 @@ export function ArticlePanel({
 
   // 阅读模式（票 B + issue 75 去卡片化）：整页自然流式，目录 sticky 跟随滚动
   return readerMode ? (
-    <div className="flex items-stretch gap-8 xl:gap-16">
+    <div className="flex items-stretch gap-10 xl:gap-14">
       <div className="flex min-w-0 flex-1 flex-col gap-5">{body}</div>
       {active?.content && active.content.sections.length > 0 ? (
         <aside
