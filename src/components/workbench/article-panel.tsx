@@ -149,7 +149,8 @@ export function ArticlePanel({
   );
   // 传 sectionIds 的数组身份作为 contentKey：文章内容被替换（切历史版本、流式重写同 id 文章）
   // 时 useMemo 产出新数组，触发 spy 重新测量各章节偏移；普通重渲染身份不变，不会多余重算。
-  const activeSection = useContainerSpy(contentRef, sectionIds, sectionIds);
+  // 阅读视图去卡片化（issue 75）：容器不滚、整页流式，spy 与定位都切 window 模式
+  const activeSection = useContainerSpy(contentRef, sectionIds, sectionIds, readerMode);
 
   const seek = (t: number) => {
     // 阅读视图没有播放器：时间出处点击交给宿主处理（跳工作台定位）
@@ -724,7 +725,7 @@ export function ArticlePanel({
       {active?.content ? (
         <div
           ref={contentRef}
-          className="glass relative min-h-0 flex-1 overflow-auto rounded-2xl p-6 lg:p-10"
+          className={`relative ${readerMode ? "pb-16" : "glass relative min-h-0 flex-1 overflow-auto rounded-2xl p-6 lg:p-10"}`}
         >
           {onAskSection ? (
             <SelectionPopover
@@ -760,7 +761,7 @@ export function ArticlePanel({
               生成中 · {active.content.sections.length} 章已完成
             </p>
           ) : null}
-          <h2 className="font-display text-2xl font-semibold leading-snug text-paper">
+          <h2 className="font-display text-3xl font-semibold leading-tight tracking-tight text-paper lg:text-[34px]">
             {active.content.title}
           </h2>
           <p className="mt-1.5 font-mono text-[10px] tracking-wider text-paper-faint">
@@ -780,7 +781,7 @@ export function ArticlePanel({
               activeSection={activeSection}
               onJump={(sectionId) => {
                 const container = contentRef.current;
-                if (container) scrollToSection(container, sectionId);
+                if (container) scrollToSection(container, sectionId, "smooth", readerMode);
               }}
             />
           ) : null}
@@ -791,9 +792,9 @@ export function ArticlePanel({
                 key={section.id}
                 id={`section-${section.id}`}
                 data-section-id={section.id}
-                className={`scroll-mt-4 ${index > 0 ? "border-t border-tint/[0.07] pt-10" : ""}`}
+                className={`${readerMode ? "scroll-mt-24" : "scroll-mt-4"} ${index > 0 ? "border-t border-tint/[0.07] pt-10" : ""}`}
               >
-                <h3 className="flex items-baseline gap-2.5 font-display text-[20px] font-semibold leading-snug text-paper">
+                <h3 className="flex items-baseline gap-2.5 font-display text-[22px] font-semibold leading-snug text-paper">
                   <span className="font-mono text-[11px] tracking-widest text-gold/80">
                     {String(index + 1).padStart(2, "0")}
                   </span>
@@ -903,14 +904,14 @@ export function ArticlePanel({
     </>
   );
 
-  // 阅读模式（票 B）：≥xl 右栏挂章节目录，正文保持居中限宽
+  // 阅读模式（票 B + issue 75 去卡片化）：整页自然流式，目录 sticky 跟随滚动
   return readerMode ? (
-    <div className="flex h-full min-h-[420px] items-stretch gap-8 xl:gap-12">
+    <div className="flex items-stretch gap-8 xl:gap-16">
       <div className="flex min-w-0 flex-1 flex-col gap-5">{body}</div>
       {active?.content && active.content.sections.length > 0 ? (
         <aside
           aria-label="章节目录"
-          className="hidden w-52 shrink-0 overflow-y-auto border-l border-tint/10 pl-5 xl:block"
+          className="sticky top-8 hidden h-fit max-h-[80svh] w-56 shrink-0 overflow-y-auto border-l border-tint/10 pl-6 xl:block"
         >
           <p className="pb-2 font-mono text-[10px] tracking-widest text-paper-faint">目录</p>
           <nav className="flex flex-col gap-0.5">
@@ -920,7 +921,7 @@ export function ArticlePanel({
                 type="button"
                 onClick={() => {
                   const container = contentRef.current;
-                  if (container) scrollToSection(container, section.id);
+                  if (container) scrollToSection(container, section.id, "smooth", readerMode);
                 }}
                 className={`truncate rounded-lg px-2 py-1 text-left text-xs leading-relaxed transition-colors ${
                   section.id === activeSection
