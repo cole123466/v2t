@@ -153,7 +153,7 @@ export function ArticleBlockView({
     case "paragraph":
       // 中文正文：稍大的字号 + 更松的行距 + 两端对齐，避免长段落"糊成一团"
       return (
-        <p className="text-[15px] leading-[1.9] text-paper-dim lg:text-base [text-align:justify] [text-justify:inter-ideograph]">
+        <p className="text-[15px] leading-[1.9] text-paper-dim lg:text-[17px] lg:leading-[1.85] [text-align:justify] [text-justify:inter-ideograph]">
           <InlineText text={block.text} times={times} onSeek={onSeek} />
         </p>
       );
@@ -167,7 +167,7 @@ export function ArticleBlockView({
       const List = block.ordered ? "ol" : "ul";
       return (
         <List
-          className={`space-y-1.5 pl-5 text-[15px] leading-[1.85] text-paper-dim marker:text-gold/70 ${
+          className={`space-y-1.5 pl-5 text-[15px] leading-[1.85] text-paper-dim marker:text-gold/70 lg:text-[17px] ${
             block.ordered ? "list-decimal" : "list-disc"
           }`}
         >

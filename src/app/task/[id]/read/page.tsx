@@ -60,7 +60,7 @@ export default function TaskReadPage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-6xl px-6 pb-10 lg:px-10">
+    <main className="mx-auto w-full max-w-7xl px-6 pb-10 lg:px-12">
       <header className="flex flex-wrap items-center justify-between gap-4 py-8">
         <div className="min-w-0">
           <h1 className="truncate font-display text-2xl font-semibold lg:text-[28px]">{task.originalName}</h1>
