@@ -14,7 +14,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 改动一律先提 GitHub issue 再实施（应急直改 main 后必须补提追溯 issue 并注明 commit 号）。
 **每个 issue 必须打两类标签，缺一不可：**
 
-- 类型标签（五选一）：`type/bug`（缺陷）、`type/feature`（新功能）、`type/chore`（工程杂务/构建/依赖/lint）、`type/docs`（文档）、`type/test`（测试）
+- 类型标签（五选一）：`bug`（缺陷）、`enhancement`（新功能）、`chore`（工程杂务/构建/依赖/lint）、`documentation`（文档）、`test`（测试）
 - 风险等级标签（三选一，与自动审查 tiering 对齐）：
   - `risk/tier1`：纯文档/测试/锁文件，验证通过可自动合并
   - `risk/tier2`：常规业务代码，零 Critical 且验证通过可自动合并
