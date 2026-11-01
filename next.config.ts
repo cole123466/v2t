@@ -9,9 +9,13 @@ const nextConfig: NextConfig = {
     .split(",")
     .map((host) => host.trim())
     .filter(Boolean),
-  // 上传走 route handler 流式读 body（Readable.fromWeb → pipeline），
-  // 不经过 Server Actions 的 bodySizeLimit，因此无需在这里调大请求体上限；
-  // 2GB 上限由 MAX_UPLOAD_GB 在 /api/tasks 内校验。
+  // 上传已迁至 /api/upload 且不在 proxy matcher 内（PR #68），请求体不经克隆缓冲，
+  // 无需调 bodySizeLimit；2GB 上限由 MAX_UPLOAD_GB 在 /api/upload 内校验。
+  // 2G 内存机器上 dev server 跑生产流量：heap 用量过 80% 时 Next 会 exit(77) 自杀重启，
+  // 前端 HMR/资源断连表现为页面疯狂刷新（2026-11-01）。关掉自杀重启，宁可持续运行。
+  experimental: {
+    devMemoryThresholdRestart: false,
+  },
   turbopack: {
     root: path.join(__dirname),
     rules: {
