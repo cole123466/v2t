@@ -46,7 +46,7 @@ export function ArticlePanel({
   defaultPurpose?: string | null;
   /** 阅读视图（票 B）：无播放器，时间出处点击改为跳工作台定位 */
   onSeekOverride?: (t: number) => void;
-  /** 阅读模式（票 A）：生成驾驶舱收成细工具条，审稿侧栏不渲染 */
+  /** 阅读模式（票 A / #75）：生成驾驶舱收成细工具条，审稿侧栏不渲染，正文去卡片化并放大标题 */
   readerMode?: boolean;
 }) {
   const [articles, setArticles] = useState<ArticleRecord[]>([]);
@@ -724,7 +724,12 @@ export function ArticlePanel({
       {active?.content ? (
         <div
           ref={contentRef}
-          className="glass relative min-h-0 flex-1 overflow-auto rounded-2xl p-6 lg:p-10"
+          className={
+            readerMode
+              ? // 阅读模式（#75）：正文不装卡片，直接铺在页面上；行宽由内部 max-w 控制
+                "relative min-h-0 flex-1 overflow-auto"
+              : "glass relative min-h-0 flex-1 overflow-auto rounded-2xl p-6 lg:p-10"
+          }
         >
           {onAskSection ? (
             <SelectionPopover
@@ -760,7 +765,11 @@ export function ArticlePanel({
               生成中 · {active.content.sections.length} 章已完成
             </p>
           ) : null}
-          <h2 className="font-display text-2xl font-semibold leading-snug text-paper">
+          <h2
+            className={`font-display font-semibold leading-snug text-paper ${
+              readerMode ? "text-3xl lg:text-4xl" : "text-2xl"
+            }`}
+          >
             {active.content.title}
           </h2>
           <p className="mt-1.5 font-mono text-[10px] tracking-wider text-paper-faint">
@@ -793,7 +802,11 @@ export function ArticlePanel({
                 data-section-id={section.id}
                 className={`scroll-mt-4 ${index > 0 ? "border-t border-tint/[0.07] pt-10" : ""}`}
               >
-                <h3 className="flex items-baseline gap-2.5 font-display text-[20px] font-semibold leading-snug text-paper">
+                <h3
+                  className={`flex items-baseline gap-2.5 font-display font-semibold leading-snug text-paper ${
+                    readerMode ? "text-2xl lg:text-[26px]" : "text-[20px]"
+                  }`}
+                >
                   <span className="font-mono text-[11px] tracking-widest text-gold/80">
                     {String(index + 1).padStart(2, "0")}
                   </span>
