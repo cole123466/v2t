@@ -6,6 +6,7 @@ vi.mock("@/server/runtime", () => ({ getRuntime: mocks.getRuntime }));
 
 import { POST as cancelPost } from "@/app/api/tasks/[id]/articles/[articleId]/cancel/route";
 import { GET as eventsGet } from "@/app/api/tasks/[id]/articles/[articleId]/events/route";
+import { JobWorker, type JobStore } from "@/server/jobs";
 
 function params(articleId = "article-1") {
   return { params: Promise.resolve({ id: "task-1", articleId }) };
@@ -78,6 +79,20 @@ describe("取消排队中的图文生成", () => {
 
     expect(res.status).toBe(409);
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe("排队中取消的通知", () => {
+  it("取消排队 job 时向已连上的订阅者发终态事件", () => {
+    const update = vi.fn();
+    const jobs = { get: () => job("queued"), update } as unknown as JobStore;
+    const worker = new JobWorker({ jobs, run: async () => {} });
+    const events: Array<{ event: string; data: unknown }> = [];
+    worker.subscribe("article-1", (e) => events.push(e));
+
+    expect(worker.cancel("job-1")).toBe(true);
+    expect(update).toHaveBeenCalledWith("job-1", { status: "canceled", error: "用户取消生成" });
+    expect(events).toEqual([{ event: "error", data: { message: "生成已取消", canceled: true } }]);
   });
 });
 

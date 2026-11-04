@@ -394,7 +394,13 @@ export class JobWorker {
     const job = this.deps.jobs.get(jobId);
     if (!job || (job.status !== "queued" && job.status !== "running")) return false;
     this.deps.jobs.update(jobId, { status: "canceled", error: "用户取消生成" });
-    if (this.current?.jobId === jobId) this.current.controller.abort();
+    if (this.current?.jobId === jobId) {
+      this.current.controller.abort();
+    } else if (job.articleId) {
+      // 排队中的 job 不会被 worker 领取，runArticleJob 不会发终态事件；
+      // 主动通知已连上的订阅者，否则它们会一直等一个永远不来的进度。
+      this.emit(job.articleId, "error", { message: "生成已取消", canceled: true });
+    }
     return true;
   }
 
