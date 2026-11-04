@@ -129,4 +129,48 @@ describe("生成事件流收流", () => {
     expect(text).toContain('"status":"interrupted"');
     expect(text.match(/event: snapshot/g)).toHaveLength(1);
   });
+
+  it("error 事件到达时先自愈文章状态再推快照（cancel 广播早于回写的竞态）", async () => {
+    const update = vi.fn();
+    let current = article("streaming");
+    let latest: { kind: string; status: string } = { ...job("running"), kind: "article" };
+    let handler: ((e: { event: string; data: unknown }) => void) | null = null;
+    mocks.getRuntime.mockReturnValue({
+      store: { getOwned: () => ({ id: "task-1" }) },
+      articles: {
+        get: () => current,
+        update: (id: string, patch: Record<string, unknown>) => {
+          update(id, patch);
+          current = { ...current, ...patch } as ReturnType<typeof article>;
+        },
+      },
+      jobs: { latestForArticle: () => latest },
+      worker: {
+        subscribe: (_id: string, fn: (e: { event: string; data: unknown }) => void) => {
+          handler = fn;
+          return () => {};
+        },
+      },
+    });
+
+    const res = await eventsGet(
+      new Request("http://localhost/api/tasks/task-1/articles/article-1/events"),
+      params(),
+    );
+
+    // 模拟 worker.cancel() 先广播、cancel 路由还没来得及回写文章的窗口
+    latest = { ...job("canceled"), kind: "article" };
+    (handler as ((e: { event: string; data: unknown }) => void) | null)?.({
+      event: "error",
+      data: { message: "生成已取消", canceled: true },
+    });
+
+    const text = await res.text();
+    expect(update).toHaveBeenCalledWith("article-1", {
+      status: "interrupted",
+      error: "生成已取消，可继续生成",
+    });
+    expect(text).toContain("event: error");
+    expect(text).toContain('"status":"interrupted"');
+  });
 });
