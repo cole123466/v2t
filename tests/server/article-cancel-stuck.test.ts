@@ -97,11 +97,19 @@ describe("排队中取消的通知", () => {
 });
 
 describe("生成事件流收流", () => {
-  it("job 已取消时只推一次快照就关闭，不挂空连接", async () => {
+  it("job 已取消时只推一次快照就关闭，并把遗留的 streaming 文章落为 interrupted", async () => {
+    const update = vi.fn();
+    let current = article("streaming");
     mocks.getRuntime.mockReturnValue({
       store: { getOwned: () => ({ id: "task-1" }) },
-      articles: { get: () => article("streaming") },
-      jobs: { latestForArticle: () => job("canceled") },
+      articles: {
+        get: () => current,
+        update: (id: string, patch: Record<string, unknown>) => {
+          update(id, patch);
+          current = { ...current, ...patch } as ReturnType<typeof article>;
+        },
+      },
+      jobs: { latestForArticle: () => ({ ...job("canceled"), kind: "article" }) },
       worker: { subscribe: vi.fn() },
     });
 
@@ -112,8 +120,13 @@ describe("生成事件流收流", () => {
 
     // 流已关闭：text() 能直接读完，不会一直等待
     const text = await res.text();
+    expect(update).toHaveBeenCalledWith("article-1", {
+      status: "interrupted",
+      error: "生成已取消，可继续生成",
+    });
     expect(text).toContain("event: snapshot");
     expect(text).toContain('"status":"canceled"');
+    expect(text).toContain('"status":"interrupted"');
     expect(text.match(/event: snapshot/g)).toHaveLength(1);
   });
 });

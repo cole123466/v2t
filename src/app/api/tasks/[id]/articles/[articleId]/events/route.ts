@@ -47,14 +47,18 @@ export async function GET(
       }
 
       // 快照：当前文章 + 当前 job 状态
-      const snapshot = () => {
-        const current = rt.articles.get(articleId);
-        const job = rt.jobs.latestForArticle(articleId);
+      const readState = () => ({
+        article: rt.articles.get(articleId),
+        job: rt.jobs.latestForArticle(articleId),
+      });
+      const snapshot = (state = readState()) => {
+        const { article, job } = state;
         send("snapshot", {
-          article: current,
+          article,
           job: job
             ? {
                 id: job.id,
+                kind: job.kind,
                 status: job.status,
                 phase: job.phase,
                 doneSections: job.doneSections,
@@ -63,12 +67,29 @@ export async function GET(
               }
             : null,
         });
-        return { article: current, job };
+        return state;
       };
-      const first = snapshot();
 
-      // 文章已落终态或没有在跑的 job（排队中被取消等）：推完快照直接收流。
+      const first = readState();
       const jobActive = first.job?.status === "queued" || first.job?.status === "running";
+      // 历史数据自愈：文章还挂着 streaming，但 article job 已终态（排队中取消、服务重启等）。
+      // 不落状态的话，POST 会因 streaming 返回 409、resume 又只接受 interrupted/failed，文章永久不可用。
+      if (first.article?.status === "streaming" && first.job?.kind === "article" && !jobActive) {
+        const status: "done" | "failed" | "interrupted" =
+          first.job.status === "succeeded" ? "done" : first.job.status === "failed" ? "failed" : "interrupted";
+        rt.articles.update(articleId, {
+          status,
+          error:
+            status === "done"
+              ? null
+              : first.job.status === "canceled"
+                ? "生成已取消，可继续生成"
+                : (first.job.error ?? "生成已中断，可继续生成"),
+        });
+      }
+      snapshot();
+
+      // 文章已落终态或没有在跑的 job：推完快照直接收流。
       if (!first.article || first.article.status !== "streaming" || !jobActive) {
         finish();
         return;
