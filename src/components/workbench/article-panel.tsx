@@ -187,6 +187,7 @@ export function ArticlePanel({
         const data = JSON.parse(dataLine) as Record<string, unknown>;
         if (event === "snapshot") {
           const article = data.article as ArticleRecord | undefined;
+          const job = data.job as { status?: string } | null | undefined;
           if (article) {
             setArticles((prev) => {
               const idx = prev.findIndex((a) => a.id === article.id);
@@ -198,6 +199,14 @@ export function ArticlePanel({
               return [article, ...prev];
             });
             setSelected(article.id);
+          }
+          // 快照是当前真实状态：文章已终态，或 job 已结束（含排队中被取消），
+          // 都不该继续等进度——收掉等待态并断开 SSE，避免永久转圈。
+          const jobActive = job?.status === "queued" || job?.status === "running";
+          if (!article || article.status !== "streaming" || !jobActive) {
+            setBusy(false);
+            setStage(null);
+            ctrl.abort();
           }
         } else if (event === "step") {
           const stage = data.stage as string | undefined;

@@ -29,15 +29,61 @@ export async function GET(
         }
       };
 
+      // 连接收流：done/error 或快照发现任务早已终态时都要主动关闭，
+      // 否则客户端会一直挂着连接等一个永远不会来的进度事件。
+      let heartbeat: ReturnType<typeof setInterval> | null = null;
+      let unsubscribe: (() => void) | null = null;
+      let finished = false;
+      function finish() {
+        if (finished) return;
+        finished = true;
+        if (heartbeat) clearInterval(heartbeat);
+        unsubscribe?.();
+        try {
+          controller.close();
+        } catch {
+          // 已关闭
+        }
+      }
+
+      const readState = () => ({
+        article: rt.articles.get(articleId),
+        job: rt.jobs.latestForArticle(articleId),
+      });
+      const jobActive = (job: ReturnType<typeof readState>["job"]) =>
+        job?.status === "queued" || job?.status === "running";
+
+      // 读状态并自愈：文章还挂着 streaming，但 article job 已终态（排队中取消、服务重启等）。
+      // 必须在下发快照前落库——否则订阅者最后一帧看到的仍是 streaming，页面会残留「生成中」。
+      // 不落状态的话，POST 会因 streaming 返回 409、resume 又只接受 interrupted/failed，文章永久不可用。
+      const settle = () => {
+        let state = readState();
+        if (state.article?.status === "streaming" && state.job?.kind === "article" && !jobActive(state.job)) {
+          const status: "done" | "failed" | "interrupted" =
+            state.job.status === "succeeded" ? "done" : state.job.status === "failed" ? "failed" : "interrupted";
+          rt.articles.update(articleId, {
+            status,
+            error:
+              status === "done"
+                ? null
+                : state.job.status === "canceled"
+                  ? "生成已取消，可继续生成"
+                  : (state.job.error ?? "生成已中断，可继续生成"),
+          });
+          state = readState();
+        }
+        return state;
+      };
+
       // 快照：当前文章 + 当前 job 状态
-      const snapshot = () => {
-        const current = rt.articles.get(articleId);
-        const job = rt.jobs.latestForArticle(articleId);
+      const snapshot = (state = settle()) => {
+        const { article, job } = state;
         send("snapshot", {
-          article: current,
+          article,
           job: job
             ? {
                 id: job.id,
+                kind: job.kind,
                 status: job.status,
                 phase: job.phase,
                 doneSections: job.doneSections,
@@ -46,20 +92,29 @@ export async function GET(
               }
             : null,
         });
+        return state;
       };
-      snapshot();
 
-      const unsubscribe = rt.worker.subscribe(articleId, (e) => {
+      const first = settle();
+      snapshot(first);
+
+      // 文章已落终态或没有在跑的 job：推完快照直接收流。
+      if (!first.article || first.article.status !== "streaming" || !jobActive(first.job)) {
+        finish();
+        return;
+      }
+
+      unsubscribe = rt.worker.subscribe(articleId, (e) => {
+        if (finished) return;
+        send(e.event, e.data);
         if (e.event === "done" || e.event === "error") {
-          send(e.event, e.data);
           snapshot();
-        } else {
-          send(e.event, e.data);
+          finish();
         }
       });
 
       // 心跳：防止中间层掐掉空闲连接
-      const heartbeat = setInterval(() => {
+      heartbeat = setInterval(() => {
         try {
           controller.enqueue(encoder.encode(": ping\n\n"));
         } catch {
@@ -67,15 +122,7 @@ export async function GET(
         }
       }, 15000);
 
-      req.signal.addEventListener("abort", () => {
-        clearInterval(heartbeat);
-        unsubscribe();
-        try {
-          controller.close();
-        } catch {
-          // 已关闭
-        }
-      }, { once: true });
+      req.signal.addEventListener("abort", finish, { once: true });
     },
   });
 
