@@ -1,11 +1,11 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { buildCatalog, type ArticleSection } from "./article";
 import type { ArticleService, ArticleStore } from "./articles";
 import type { Transcript } from "./asr";
-import { readFrameManifest } from "./frames";
+import { appendOverviewFrames, overviewFrameCount, readFrameManifest } from "./frames";
 import type { JobRecord, JobStore, WorkerEvent } from "./jobs";
-import { errorFields, logError, logInfo } from "./log";
+import { errorFields, logError, logInfo, logWarn } from "./log";
 import { taskDir, transcriptPath } from "./paths";
 
 export interface ArticleJobDeps {
@@ -42,7 +42,36 @@ export async function runArticleJob(
     emit("error", { message: "转录稿缺失" });
     return;
   }
-  const manifest = await readFrameManifest(dir);
+  // 存量任务的帧清单可能仍是固定 12 帧：源媒体还在时按新密度补齐，
+  // 让已入库任务重新生成也能提高配图密度；源已清理则沿用旧帧，不阻塞。
+  const wantedFrames = overviewFrameCount(transcript.durationSec);
+  const existingManifest = await readFrameManifest(dir);
+  let manifest = existingManifest;
+  if (wantedFrames > (existingManifest?.frames.length ?? 0)) {
+    const sourceFile = (await readdir(dir).catch(() => [] as string[])).find((name) =>
+      name.startsWith("source."),
+    );
+    if (sourceFile) {
+      try {
+        manifest = await appendOverviewFrames(
+          path.join(dir, sourceFile),
+          dir,
+          transcript.durationSec,
+          wantedFrames,
+        );
+        logInfo("overview frames upgraded", {
+          task_id: taskId,
+          from: existingManifest?.frames.length ?? 0,
+          to: manifest.frames.length,
+        });
+      } catch (err) {
+        logWarn("overview frames upgrade failed", {
+          task_id: taskId,
+          ...errorFields(err),
+        });
+      }
+    }
+  }
   const catalog = buildCatalog(transcript, manifest);
   const frameFiles = new Map((manifest?.frames ?? []).map((f) => [f.id, path.join(dir, f.file)]));
 

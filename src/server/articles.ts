@@ -273,6 +273,7 @@ function sectionPrompt(
     frameImages.length > 0
       ? frameImages.map((f) => `[${f.id}]`).join(" ")
       : frameCatalogText(catalog),
+    frameImages.length > 0 ? "本章至少引用 1 张画面作为 figure（画面须与正文相关，不要硬配）。" : "",
     "",
     BLOCK_SPEC,
     "只输出 JSON：",
@@ -417,6 +418,14 @@ export class ArticleService {
       frames: input.catalog.frames.length,
       segments: input.catalog.transcripts.length,
     });
+    // 没有画面时文章会退化为纯文字：显性告警，便于定位抽帧失败（而非模型不配图）
+    if (input.catalog.frames.length === 0) {
+      logWarn("article generation without frames", {
+        task_id: input.taskId,
+        trace_id: input.traceId,
+        article_id: record.id,
+      });
+    }
 
     // 一篇文章可能同时用到文本模型（提纲）与视觉模型（带画面的章节），
     // 按实际调用去重记录，避免整篇都被记成默认文本模型

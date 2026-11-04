@@ -38,6 +38,22 @@ export function overviewTimestamps(durationSec: number, count: number): number[]
   );
 }
 
+/** 全景帧密度：每 20s 一帧，长视频不再固定 12 帧 */
+export const FRAME_INTERVAL_SEC = 20;
+/** 全景帧下限：短片保持既有 12 帧密度 */
+export const MIN_OVERVIEW_FRAMES = 12;
+/** 全景帧上限：控制抽帧耗时与磁盘占用 */
+export const MAX_OVERVIEW_FRAMES = 120;
+
+/** 按时长决定全景帧张数：ceil(时长/20)，夹在 [12, 120]，非法时长返回 0 */
+export function overviewFrameCount(durationSec: number): number {
+  if (!Number.isFinite(durationSec) || durationSec <= 0) return 0;
+  return Math.min(
+    MAX_OVERVIEW_FRAMES,
+    Math.max(MIN_OVERVIEW_FRAMES, Math.ceil(durationSec / FRAME_INTERVAL_SEC)),
+  );
+}
+
 function frameId(index: number): string {
   return `f${String(index).padStart(2, "0")}`;
 }
@@ -123,6 +139,26 @@ export async function appendEvidenceFrames(
     await writeFile(frameManifestPath(dir), JSON.stringify(next, null, 2), "utf8");
   }
   return frames;
+}
+
+/** 补齐全景帧：保留既有帧（旧文章仍按旧 id 引用），按新密度追加，返回合并后的清单 */
+export async function appendOverviewFrames(
+  input: string,
+  dir: string,
+  durationSec: number,
+  count: number,
+): Promise<FrameManifest> {
+  const existing = await readFrameManifest(dir);
+  const frames = existing?.frames ?? [];
+  const startIndex = frames.reduce((max, frame) => Math.max(max, Number(frame.id.slice(1)) + 1), 0);
+  const timestamps = overviewTimestamps(durationSec, count);
+  const added = await extractFramesAt(input, dir, timestamps, { kind: "overview", startIndex });
+  if (added.length === 0) return existing ?? { width: 1280, frames: [] };
+  // 按时间排序：章节取帧是按 index 切片，必须保持时间单调
+  const merged = [...frames, ...added].sort((a, b) => a.tSec - b.tSec);
+  const manifest: FrameManifest = { width: existing?.width ?? 1280, frames: merged };
+  await writeFile(frameManifestPath(dir), JSON.stringify(manifest, null, 2), "utf8");
+  return manifest;
 }
 
 export async function readFrameManifest(dir: string): Promise<FrameManifest | null> {
