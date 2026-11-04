@@ -23,5 +23,10 @@ export async function POST(
   rt.activities.runningIdsForRun(job.id).forEach((sid) =>
     rt.activities.updateStatus(sid, "canceled", "用户取消生成"),
   );
+  // 排队中的 job 被取消时从未被 worker 领取，runArticleJob 的失败回写不会执行；
+  // 这里兜底把文章从 streaming 落到 interrupted，否则前端刷新后会一直重新订阅、永远转圈。
+  if (rt.articles.get(articleId)?.status === "streaming") {
+    rt.articles.update(articleId, { status: "interrupted", error: "生成已取消，可继续生成" });
+  }
   return Response.json({ canceled: true, jobId: job.id });
 }

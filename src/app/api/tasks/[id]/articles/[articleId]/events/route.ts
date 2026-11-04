@@ -29,6 +29,23 @@ export async function GET(
         }
       };
 
+      // 连接收流：done/error 或快照发现任务早已终态时都要主动关闭，
+      // 否则客户端会一直挂着连接等一个永远不会来的进度事件。
+      let heartbeat: ReturnType<typeof setInterval> | null = null;
+      let unsubscribe: (() => void) | null = null;
+      let finished = false;
+      function finish() {
+        if (finished) return;
+        finished = true;
+        if (heartbeat) clearInterval(heartbeat);
+        unsubscribe?.();
+        try {
+          controller.close();
+        } catch {
+          // 已关闭
+        }
+      }
+
       // 快照：当前文章 + 当前 job 状态
       const snapshot = () => {
         const current = rt.articles.get(articleId);
@@ -46,20 +63,28 @@ export async function GET(
               }
             : null,
         });
+        return { article: current, job };
       };
-      snapshot();
+      const first = snapshot();
 
-      const unsubscribe = rt.worker.subscribe(articleId, (e) => {
+      // 文章已落终态或没有在跑的 job（排队中被取消等）：推完快照直接收流。
+      const jobActive = first.job?.status === "queued" || first.job?.status === "running";
+      if (!first.article || first.article.status !== "streaming" || !jobActive) {
+        finish();
+        return;
+      }
+
+      unsubscribe = rt.worker.subscribe(articleId, (e) => {
+        if (finished) return;
+        send(e.event, e.data);
         if (e.event === "done" || e.event === "error") {
-          send(e.event, e.data);
           snapshot();
-        } else {
-          send(e.event, e.data);
+          finish();
         }
       });
 
       // 心跳：防止中间层掐掉空闲连接
-      const heartbeat = setInterval(() => {
+      heartbeat = setInterval(() => {
         try {
           controller.enqueue(encoder.encode(": ping\n\n"));
         } catch {
@@ -67,15 +92,7 @@ export async function GET(
         }
       }, 15000);
 
-      req.signal.addEventListener("abort", () => {
-        clearInterval(heartbeat);
-        unsubscribe();
-        try {
-          controller.close();
-        } catch {
-          // 已关闭
-        }
-      }, { once: true });
+      req.signal.addEventListener("abort", finish, { once: true });
     },
   });
 
