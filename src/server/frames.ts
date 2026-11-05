@@ -38,6 +38,22 @@ export function overviewTimestamps(durationSec: number, count: number): number[]
   );
 }
 
+/** 全景帧密度：每 20s 一帧，长视频不再固定 12 帧 */
+export const FRAME_INTERVAL_SEC = 20;
+/** 全景帧下限：短片保持既有 12 帧密度 */
+export const MIN_OVERVIEW_FRAMES = 12;
+/** 全景帧上限：控制抽帧耗时与磁盘占用 */
+export const MAX_OVERVIEW_FRAMES = 120;
+
+/** 按时长决定全景帧张数：ceil(时长/20)，夹在 [12, 120]，非法时长返回 0 */
+export function overviewFrameCount(durationSec: number): number {
+  if (!Number.isFinite(durationSec) || durationSec <= 0) return 0;
+  return Math.min(
+    MAX_OVERVIEW_FRAMES,
+    Math.max(MIN_OVERVIEW_FRAMES, Math.ceil(durationSec / FRAME_INTERVAL_SEC)),
+  );
+}
+
 function frameId(index: number): string {
   return `f${String(index).padStart(2, "0")}`;
 }
@@ -50,7 +66,7 @@ export async function extractFramesAt(
   input: string,
   dir: string,
   timestamps: number[],
-  opts: { kind: FrameKind; width?: number; quality?: number; startIndex?: number } = {
+  opts: { kind: FrameKind; width?: number; quality?: number; startIndex?: number; signal?: AbortSignal } = {
     kind: "overview",
   },
 ): Promise<Frame[]> {
@@ -62,6 +78,8 @@ export async function extractFramesAt(
   const frames: Frame[] = [];
 
   for (let i = 0; i < timestamps.length; i++) {
+    // 补帧可能串行 spawn 上百次 ffmpeg：取消后必须立刻停手，别阻塞串行 worker
+    if (opts.signal?.aborted) throw new Error("抽帧已取消");
     const tSec = timestamps[i];
     const id = frameId(startIndex + i);
     const name = `${id}.jpg`;
@@ -123,6 +141,40 @@ export async function appendEvidenceFrames(
     await writeFile(frameManifestPath(dir), JSON.stringify(next, null, 2), "utf8");
   }
   return frames;
+}
+
+/**
+ * 补齐全景帧到目标总数：保留既有帧（旧文章仍按旧 id 引用），只追加缺口数量，
+ * 新帧时间点按缺口在全片均匀铺开，跳过与既有帧重合的点。
+ */
+export async function appendOverviewFrames(
+  input: string,
+  dir: string,
+  durationSec: number,
+  targetCount: number,
+  signal?: AbortSignal,
+): Promise<FrameManifest> {
+  const existing = await readFrameManifest(dir);
+  const frames = existing?.frames ?? [];
+  // 只数全景帧：证据帧（kind=evidence）不算密度，否则会误判已达标
+  const overviewCount = frames.filter((frame) => frame.kind === "overview").length;
+  const missing = Math.max(0, targetCount - overviewCount);
+  if (missing === 0) return existing ?? { width: 1280, frames: [] };
+
+  const timestamps = overviewTimestamps(durationSec, missing).filter(
+    // 只跳过几乎重合的点（重试时同位置重复抽帧），不误伤正常的密集采样
+    (tSec) => !frames.some((frame) => Math.abs(frame.tSec - tSec) < 0.1),
+  );
+  if (timestamps.length === 0) return existing ?? { width: 1280, frames: [] };
+
+  const startIndex = frames.reduce((max, frame) => Math.max(max, Number(frame.id.slice(1)) + 1), 0);
+  const added = await extractFramesAt(input, dir, timestamps, { kind: "overview", startIndex, signal });
+  if (added.length === 0) return existing ?? { width: 1280, frames: [] };
+  // 按时间排序：章节取帧是按 index 切片，必须保持时间单调
+  const merged = [...frames, ...added].sort((a, b) => a.tSec - b.tSec);
+  const manifest: FrameManifest = { width: existing?.width ?? 1280, frames: merged };
+  await writeFile(frameManifestPath(dir), JSON.stringify(manifest, null, 2), "utf8");
+  return manifest;
 }
 
 export async function readFrameManifest(dir: string): Promise<FrameManifest | null> {

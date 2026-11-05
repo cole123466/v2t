@@ -8,7 +8,7 @@ import {
   type SubtitleCue,
 } from "./subtitle";
 import { audioPath, sourcePath, taskDir, transcriptPath } from "./paths";
-import { extractOverviewFrames } from "./frames";
+import { extractOverviewFrames, overviewFrameCount } from "./frames";
 import type { SourceProvider } from "./source";
 import type { Task, TaskPatch, TaskStore } from "./tasks";
 import { elapsedMs, errorFields, logError, logInfo, logWarn } from "./log";
@@ -23,7 +23,7 @@ export interface RunnerOptions {
   source?: SourceProvider;
   /** 超过该秒数即分段转写；默认 10 分钟（见 DEFAULT_CHUNK_SECONDS） */
   chunkSeconds?: number;
-  /** 全景帧张数，默认 12 */
+  /** 全景帧张数覆盖值；缺省按时长自动决定（20s 一帧，12-120） */
   overviewFrames?: number;
   /** 同时等待处理的任务上限（不含正在处理的那个），默认 3 */
   queueLimit?: number;
@@ -35,7 +35,6 @@ export interface RunnerOptions {
  * （3.4MB）稳定 60-70s 返回。所以按「单请求能在超时窗口内跑完」来分段。
  */
 const DEFAULT_CHUNK_SECONDS = 10 * 60;
-const DEFAULT_OVERVIEW_FRAMES = 12;
 
 /** 排队任务上限：串行管线同一时刻只处理 1 个，最多再排 3 个等待 */
 export const DEFAULT_QUEUE_LIMIT = 3;
@@ -315,15 +314,29 @@ export class TaskRunner {
 
       // 阶段 3：全景帧（失败不阻塞就绪——抽帧只影响文章与画面问答）
       const framesAt = Date.now();
+      const requestedFrames = this.opts.overviewFrames ?? overviewFrameCount(info.durationSec);
       try {
-        await extractOverviewFrames(
-          source,
-          dir,
-          info.durationSec,
-          this.opts.overviewFrames ?? DEFAULT_OVERVIEW_FRAMES,
-        );
+        const manifest = await extractOverviewFrames(source, dir, info.durationSec, requestedFrames);
+        const extracted = manifest.frames.length;
+        // 0 帧会让图文文章静默退化成纯文字：必须留痕，便于排查抽帧失败
+        if (extracted === 0) {
+          logWarn("overview frames empty", {
+            task_id: taskId,
+            requested: requestedFrames,
+            duration_sec: info.durationSec,
+          });
+        } else if (extracted < requestedFrames) {
+          logWarn("overview frames partial", {
+            task_id: taskId,
+            requested: requestedFrames,
+            extracted,
+            duration_sec: info.durationSec,
+          });
+        }
         logInfo("overview frames ready", {
           task_id: taskId,
+          frames: extracted,
+          requested: requestedFrames,
           duration_ms: elapsedMs(framesAt),
         });
       } catch (err) {
