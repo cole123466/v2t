@@ -43,10 +43,22 @@ export function getLlmConfig(): { apiKey: string; baseUrl: string; model: string
 }
 
 /**
- * 图文文章的视觉模型（需支持图片输入）。独立于纯文本 LLM_MODEL。
+ * 视觉调用配置（需支持图片输入）。独立于纯文本 LLM_MODEL。
+ *
  * 默认 glm-4.6v：实测可稳定返回正文；glm-4.6v-flash 虽免费但高峰期常 429，
  * glm-4.5v 只输出思维链不出正文，都不宜作默认。
+ *
+ * LLM_VISION_BASE_URL 与 LLM_VISION_API_KEY 同时配置时，带图请求走独立服务商；
+ * 只配其中一个（或都不配）则整体沿用文本 LLM 的 base/key，避免把 A 家的 key 发给 B 家。
  */
+export function getVisionConfig(): { apiKey: string; baseUrl: string; model: string } {
+  const model = process.env.LLM_VISION_MODEL?.trim() || "glm-4.6v";
+  const baseUrl = process.env.LLM_VISION_BASE_URL?.trim();
+  const apiKey = process.env.LLM_VISION_API_KEY?.trim();
+  if (baseUrl && apiKey) return { apiKey, baseUrl, model };
+  return { ...getLlmConfig(), model };
+}
+
 export function getVisionModel(): string {
-  return process.env.LLM_VISION_MODEL?.trim() || "glm-4.6v";
+  return getVisionConfig().model;
 }

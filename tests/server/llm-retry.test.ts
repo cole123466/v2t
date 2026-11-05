@@ -174,3 +174,91 @@ describe("createOpenAiCompatibleLlm 瞬断重试", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("带图消息走独立视觉服务商", () => {
+  const keys = [
+    "LLM_API_KEY",
+    "LLM_BASE_URL",
+    "LLM_MODEL",
+    "LLM_VISION_API_KEY",
+    "LLM_VISION_BASE_URL",
+    "LLM_VISION_MODEL",
+  ] as const;
+  const prev = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    for (const key of keys) {
+      const value = prev[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const imageMessage = () => [
+    {
+      role: "user" as const,
+      content: [
+        { type: "text" as const, text: "看图写一段" },
+        { type: "image_url" as const, image_url: { url: "data:image/jpeg;base64,AAAA" } },
+      ],
+    },
+  ];
+
+  it("配齐 vision base/key 时，图片消息发往视觉服务商", async () => {
+    process.env.LLM_API_KEY = "text-key";
+    process.env.LLM_BASE_URL = "https://text.test/v1";
+    process.env.LLM_MODEL = "text-model";
+    process.env.LLM_VISION_API_KEY = "vision-key";
+    process.env.LLM_VISION_BASE_URL = "https://vision.test/v1";
+    process.env.LLM_VISION_MODEL = "vision-model";
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(["图"]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const seen: string[] = [];
+    await createOpenAiCompatibleLlm().generate(imageMessage(), () => {}, {
+      onModel: (model) => seen.push(model),
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://vision.test/v1/chat/completions");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer vision-key");
+    expect(JSON.parse(String(init.body)).model).toBe("vision-model");
+    expect(seen).toEqual(["vision-model"]);
+  });
+
+  it("只配 vision model 时沿用文本服务商的 base/key", async () => {
+    process.env.LLM_API_KEY = "text-key";
+    process.env.LLM_BASE_URL = "https://text.test/v1";
+    process.env.LLM_MODEL = "text-model";
+    delete process.env.LLM_VISION_API_KEY;
+    delete process.env.LLM_VISION_BASE_URL;
+    process.env.LLM_VISION_MODEL = "vision-model";
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(["图"]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createOpenAiCompatibleLlm().generate(imageMessage(), () => {});
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://text.test/v1/chat/completions");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer text-key");
+    expect(JSON.parse(String(init.body)).model).toBe("vision-model");
+  });
+
+  it("纯文本消息仍走文本服务商", async () => {
+    process.env.LLM_API_KEY = "text-key";
+    process.env.LLM_BASE_URL = "https://text.test/v1";
+    process.env.LLM_MODEL = "text-model";
+    process.env.LLM_VISION_API_KEY = "vision-key";
+    process.env.LLM_VISION_BASE_URL = "https://vision.test/v1";
+    process.env.LLM_VISION_MODEL = "vision-model";
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(["文"]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createOpenAiCompatibleLlm().generate([{ role: "user", content: "hi" }], () => {});
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://text.test/v1/chat/completions");
+    expect(JSON.parse(String(init.body)).model).toBe("text-model");
+  });
+});
