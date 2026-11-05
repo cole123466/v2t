@@ -1,13 +1,12 @@
-import { getLlmConfig, getVisionModel } from "./config";
+import { getLlmConfig, getVisionConfig } from "./config";
 import type { LLMCallMeta, LLMMessage, LLMProvider } from "./generations";
 import { elapsedMs, errorFields, logError, logInfo, logWarn } from "./log";
 
-/** 消息里带图片块时改用视觉模型 */
-function pickModel(messages: LLMMessage[]): string {
-  const hasImage = messages.some(
+/** 消息里是否带图片块：决定走文本 provider 还是独立的视觉 provider */
+function hasImageInput(messages: LLMMessage[]): boolean {
+  return messages.some(
     (m) => Array.isArray(m.content) && m.content.some((part) => part.type === "image_url"),
   );
-  return hasImage ? getVisionModel() : getLlmConfig().model;
 }
 
 /** 瞬断类网络错误码：连接被重置/超时/对端断开，重试有意义 */
@@ -83,11 +82,13 @@ async function streamOnce(
   onChunk: (delta: string) => void,
   meta?: LLMCallMeta,
 ): Promise<string> {
-  const { apiKey, baseUrl } = getLlmConfig();
-  if (!apiKey) throw new Error("未配置 LLM_API_KEY");
+  const vision = hasImageInput(messages);
+  const { apiKey, baseUrl, model } = vision ? getVisionConfig() : getLlmConfig();
+  if (!apiKey) {
+    throw new Error(vision ? "未配置视觉模型 API_KEY（LLM_VISION_API_KEY / LLM_API_KEY）" : "未配置 LLM_API_KEY");
+  }
 
   const startedAt = Date.now();
-  const model = pickModel(messages);
   // 实际模型由这里决定（可能从文本模型切到视觉模型），先告知调用方再发请求
   meta?.onModel?.(model);
   const fields = {
