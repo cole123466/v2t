@@ -14,7 +14,7 @@
 # 配置：/etc/v2t-deploy.conf（可选，写 DEPLOY_* 变量），或直接给环境变量：
 #   DEPLOY_REPO / DEPLOY_BRANCH / DEPLOY_SERVICE / DEPLOY_APP_PORT
 #   DEPLOY_MIN_MEM_MB=250 / DEPLOY_HEALTH_TIMEOUT=90 / DEPLOY_NPM_TIMEOUT=900
-#   DEPLOY_NOTIFY_WEBHOOK=<飞书自定义机器人 webhook，可选>
+#   DEPLOY_NOTIFY_WEBHOOK=<飞书自定义机器人 webhook；不配则复用 agent 的飞书应用通道>
 # 用法：
 #   scripts/deploy-sync.sh            # 正常部署（systemd 调用）
 #   scripts/deploy-sync.sh --dry-run  # 只检查，不写状态、不重启
@@ -88,11 +88,16 @@ save_state() {
 notify() {
   local text=$1
   log "通知：$text"
-  [ -n "$WEBHOOK" ] || return 0
-  local payload
-  payload=$(node -e 'process.stdout.write(JSON.stringify({msg_type:"text",content:{text:process.argv[1]}}))' "$text")
-  curl -fsS --max-time 10 -H 'Content-Type: application/json' -d "$payload" "$WEBHOOK" >/dev/null 2>&1 \
-    || log "通知发送失败（不影响部署结果）"
+  if [ -n "$WEBHOOK" ]; then
+    local payload
+    payload=$(node -e 'process.stdout.write(JSON.stringify({msg_type:"text",content:{text:process.argv[1]}}))' "$text")
+    curl -fsS --max-time 10 -H 'Content-Type: application/json' -d "$payload" "$WEBHOOK" >/dev/null 2>&1 \
+      || log "通知发送失败（不影响部署结果）"
+    return 0
+  fi
+  # 未配置自定义机器人：复用 agent 的飞书应用凭证与最近会话（agent/.env + agent/state/last-chat.json）
+  node "$SCRIPT_DIR/feishu-notify.mjs" "$text" >/dev/null 2>&1 \
+    || log "飞书通知发送失败（不影响部署结果；可执行 node scripts/feishu-notify.mjs --check 自检）"
 }
 
 defer() {
@@ -265,7 +270,7 @@ deploy() {
   LAST_RESULT=deployed
   LAST_REASON=""
   save_state
-  notify "v2t 已部署 ${target:0:7}：$(git -C "$REPO" log -1 --format=%s "$target")"
+  notify "v2t 网站已更新到最新（${target:0:7}）：$(git -C "$REPO" log -1 --format=%s "$target")"
 }
 
 port_in_use() {
