@@ -46,8 +46,9 @@ export async function runArticleJob(
   // 让已入库任务重新生成也能提高配图密度；源已清理则沿用旧帧，不阻塞。
   const wantedFrames = overviewFrameCount(transcript.durationSec);
   const existingManifest = await readFrameManifest(dir);
+  const existingOverview = (existingManifest?.frames ?? []).filter((frame) => frame.kind === "overview").length;
   let manifest = existingManifest;
-  if (wantedFrames > (existingManifest?.frames.length ?? 0)) {
+  if (wantedFrames > existingOverview) {
     const sourceFile = (await readdir(dir).catch(() => [] as string[])).find((name) =>
       name.startsWith("source."),
     );
@@ -58,13 +59,29 @@ export async function runArticleJob(
           dir,
           transcript.durationSec,
           wantedFrames,
+          signal,
         );
         logInfo("overview frames upgraded", {
           task_id: taskId,
-          from: existingManifest?.frames.length ?? 0,
+          from: existingOverview,
           to: manifest.frames.length,
         });
       } catch (err) {
+        // 补帧阶段被取消/停机：按既有语义收尾，别把 job 留在 running 阻塞队列
+        if (signal.aborted) {
+          const canceled = deps.jobs.get(job.id)?.status === "canceled";
+          if (!canceled) {
+            deps.jobs.update(job.id, { status: "interrupted", error: "抽帧中断" });
+          }
+          if (deps.articles.get(articleId)?.status === "streaming") {
+            deps.articles.update(articleId, {
+              status: "interrupted",
+              error: canceled ? "生成已取消，可继续生成" : "抽帧中断，可继续生成",
+            });
+          }
+          emit("error", { message: canceled ? "生成已取消" : "生成已中止" });
+          return;
+        }
         logWarn("overview frames upgrade failed", {
           task_id: taskId,
           ...errorFields(err),
