@@ -107,6 +107,60 @@ describe("08 号票：后台执行", () => {
     expect(events).toContain("done");
   });
 
+  it("终校验失败时降级交付：文章置 done 并记录告警", async () => {
+    await seedTranscript("t-bg-degrade");
+    const h = makeHarness(fakeLlm());
+    // 核对→重写链路返回 5 列表格：章节级校验不管核对产物，终校验才会发现列数超限
+    let calls = 0;
+    const llm: LLMProvider = {
+      async generate(messages: LLMMessage[]) {
+        calls += 1;
+        const text = JSON.stringify(messages);
+        if (calls === 1) {
+          return JSON.stringify({
+            title: "降级文章",
+            sections: [{ id: "s1", title: "第1章", summary: "" }],
+            mindMap: [],
+          });
+        }
+        if (text.includes("核对员")) {
+          return JSON.stringify({ results: [{ i: 0, verdict: "unsupported", reason: "原文没有依据" }] });
+        }
+        if (text.includes("未能支持论断")) {
+          return JSON.stringify({
+            id: "s1",
+            title: "第1章",
+            blocks: [
+              { type: "paragraph", text: "重写后的正文 [[t01]]" },
+              { type: "table", header: ["一", "二", "三", "四", "五"], rows: [["1", "2", "3", "4", "5"]] },
+            ],
+          });
+        }
+        return JSON.stringify({
+          id: "s1",
+          title: "第1章",
+          blocks: [{ type: "paragraph", text: "正文 [[t01]]" }],
+        });
+      },
+    };
+    const svc = new ArticleService({ store: h.articles, llm, activities: h.activities });
+    const record = h.articles.create({ taskId: "t-bg-degrade", detailLevel: "standard", purpose: null, model: "m" });
+    const job = h.jobs.create({ taskId: "t-bg-degrade", kind: "article", articleId: record.id });
+    await runArticleJob(
+      { jobs: h.jobs, articles: h.articles, articleService: svc, dataDir: dir },
+      job,
+      new AbortController().signal,
+      () => {},
+    );
+
+    expect(h.jobs.get(job.id)?.status).toBe("succeeded");
+    const article = h.articles.get(record.id)!;
+    expect(article.status).toBe("done");
+    expect(article.error).toContain("校验存在告警");
+    expect(article.error).toContain("表格需 2-4 列");
+    expect(article.content?.sections).toHaveLength(1);
+  });
+
   it("验收3：取消后 job 为 canceled，已存章节保留", async () => {
     await seedTranscript("t-bg-2");
     const h = makeHarness(fakeLlm(3));
