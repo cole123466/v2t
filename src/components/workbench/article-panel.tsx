@@ -136,12 +136,15 @@ export function ArticlePanel({
       });
   }, [taskId]);
 
-  // 生成中的文章也作为展示对象：部分 content 落库后刷新页面能直接看到已生成章节
+  // 生成中的文章也作为展示对象：部分 content 落库后刷新页面能直接看到已生成章节。
+  // 失败/中断的尝试同样要作为展示对象，否则单独一次失败的生成在重进页面后
+  // 既无正文也无记录，用户无法判断是否生成过（只有再点一次生成才会凑够两条记录）。
   const active =
     articles.find((a) => a.id === selected) ??
     articles.find((a) => a.status === "done") ??
     articles.find((a) => a.status === "streaming") ??
-    articles.find((a) => a.status === "interrupted");
+    articles.find((a) => a.status === "interrupted") ??
+    articles.find((a) => a.status === "failed");
 
   const sectionIds = useMemo(
     () => active?.content?.sections.map((s) => s.id) ?? [],
@@ -775,6 +778,14 @@ export function ArticlePanel({
               生成中 · {active.content.sections.length} 章已完成
             </p>
           ) : null}
+          {(active.status === "failed" || active.status === "interrupted") && active.error ? (
+            <p className="mb-4 flex items-center gap-2 rounded-xl border border-danger/30 bg-danger/5 px-3 py-2 font-mono text-[10px] leading-relaxed text-danger/90">
+              <X className="size-3 shrink-0" strokeWidth={1.5} />
+              <span className="min-w-0 break-words">
+                {active.status === "interrupted" ? "生成已中断" : "生成失败"}：{active.error}
+              </span>
+            </p>
+          ) : null}
           <h2
             className={`font-display font-semibold text-paper ${
               readerMode ? "text-3xl leading-tight tracking-tight lg:text-4xl" : "text-2xl leading-snug"
@@ -858,9 +869,9 @@ export function ArticlePanel({
         </div>
       ) : null}
 
-      {articles.length > 1 ? (
+      {articles.length > 0 ? (
         <div className="glass shrink-0 rounded-2xl p-3">
-          <p className="mb-2 font-mono text-[10px] tracking-widest text-paper-faint">历史版本</p>
+          <p className="mb-2 font-mono text-[10px] tracking-widest text-paper-faint">生成记录</p>
           <div className="flex flex-wrap gap-1.5">
             {articles.map((a) => (
               <button
@@ -881,6 +892,7 @@ export function ArticlePanel({
                   <RotateCcw className="size-3 animate-spin" strokeWidth={1.5} />
                 ) : null}
                 {new Date(a.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+                {a.status === "failed" ? " · 失败" : a.status === "interrupted" ? " · 已中断" : a.status === "streaming" ? " · 生成中" : ""}
                 {a.title ? ` · ${a.title.slice(0, 12)}` : ""}
               </button>
             ))}
@@ -891,9 +903,11 @@ export function ArticlePanel({
       {!active?.content && !busy ? (
         <div className="glass flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-2xl border-dashed p-8 text-center">
           <FileText className="size-7 text-paper-faint" strokeWidth={1.5} />
-          <p className="text-sm text-paper-dim">还没有图文文章</p>
+          <p className="text-sm text-paper-dim">{active ? "上次生成未完成" : "还没有图文文章"}</p>
           <p className="max-w-xs text-xs leading-relaxed text-paper-faint">
-            基于转写稿与全景画面生成带章节、时间出处和内容导图的文章。
+            {active
+              ? "本次生成失败或中断，生成记录中留有尝试，可重新生成。"
+              : "基于转写稿与全景画面生成带章节、时间出处和内容导图的文章。"}
           </p>
           {readerMode ? (
             <button
