@@ -146,6 +146,13 @@ export function ArticlePanel({
     articles.find((a) => a.status === "interrupted") ??
     articles.find((a) => a.status === "failed");
 
+  // 「继续生成」不该依赖 active.content：后端 resume 接受 interrupted/failed，
+  // 失败在提纲前（还没落任何章节）时 content 为 null，仍可在这条记录上续跑。
+  // 否则用户即便看到历史记录，也点不到对应版本的「继续生成」。
+  const generationRunning = busy || articles.some((a) => a.status === "streaming");
+  const activeResumable =
+    active && (active.status === "failed" || active.status === "interrupted") ? active : null;
+
   const sectionIds = useMemo(
     () => active?.content?.sections.map((s) => s.id) ?? [],
     [active],
@@ -519,6 +526,18 @@ export function ArticlePanel({
                   )}
                 </>
               ) : null}
+              {/* 失败/中断但还没落任何章节：content 为 null，仍要能在这条记录上续跑 */}
+              {!busy && activeResumable && !active?.content ? (
+                <button
+                  type="button"
+                  onClick={() => void resumeGeneration(activeResumable.id)}
+                  title="在本次生成记录上继续，而不是新建一条"
+                  className="inline-flex items-center gap-1 rounded-lg border border-gold/40 bg-gold/10 px-2 py-1 font-mono text-[10px] text-gold transition-colors hover:bg-gold/20"
+                >
+                  <RotateCcw className="size-3" strokeWidth={1.5} />
+                  继续生成
+                </button>
+              ) : null}
             </div>
           </div>
           {error ? (
@@ -682,14 +701,16 @@ export function ArticlePanel({
           </button>
         ) : null}
 
-        {!busy && active && (active.status === "interrupted" || active.status === "failed") && active.content ? (
+        {!busy && activeResumable ? (
           <button
             type="button"
-            onClick={() => void resumeGeneration(active.id)}
+            onClick={() => void resumeGeneration(activeResumable.id)}
             className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-xl border border-gold/40 bg-gold/10 px-3 py-1.5 font-mono text-[10px] tracking-wider text-gold transition-colors hover:bg-gold/20"
           >
             <RotateCcw className="size-3" strokeWidth={1.5} />
-            已保存 {active.content.sections.length} 章 · 继续生成
+            {activeResumable.content
+              ? `已保存 ${activeResumable.content.sections.length} 章 · 继续生成`
+              : "继续生成"}
           </button>
         ) : null}
 
@@ -873,29 +894,49 @@ export function ArticlePanel({
         <div className="glass shrink-0 rounded-2xl p-3">
           <p className="mb-2 font-mono text-[10px] tracking-widest text-paper-faint">生成记录</p>
           <div className="flex flex-wrap gap-1.5">
-            {articles.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                onClick={() => setSelected(a.id)}
-                className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 font-mono text-[10px] transition-colors ${
-                  a.id === active?.id
-                    ? "border-gold/40 text-gold"
-                    : "border-tint/10 text-paper-faint hover:text-paper-dim"
-                }`}
-              >
-                {a.status === "failed" ? (
-                  <X className="size-3" strokeWidth={1.5} />
-                ) : a.status === "interrupted" ? (
-                  <X className="size-3 text-gold/70" strokeWidth={1.5} />
-                ) : a.status === "streaming" ? (
-                  <RotateCcw className="size-3 animate-spin" strokeWidth={1.5} />
-                ) : null}
-                {new Date(a.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
-                {a.status === "failed" ? " · 失败" : a.status === "interrupted" ? " · 已中断" : a.status === "streaming" ? " · 生成中" : ""}
-                {a.title ? ` · ${a.title.slice(0, 12)}` : ""}
-              </button>
-            ))}
+            {articles.map((a) => {
+              const resumable = a.status === "failed" || a.status === "interrupted";
+              return (
+                <div key={a.id} className="inline-flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setSelected(a.id)}
+                    className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 font-mono text-[10px] transition-colors ${
+                      a.id === active?.id
+                        ? "border-gold/40 text-gold"
+                        : "border-tint/10 text-paper-faint hover:text-paper-dim"
+                    }`}
+                  >
+                    {a.status === "failed" ? (
+                      <X className="size-3" strokeWidth={1.5} />
+                    ) : a.status === "interrupted" ? (
+                      <X className="size-3 text-gold/70" strokeWidth={1.5} />
+                    ) : a.status === "streaming" ? (
+                      <RotateCcw className="size-3 animate-spin" strokeWidth={1.5} />
+                    ) : null}
+                    {new Date(a.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+                    {a.status === "failed" ? " · 失败" : a.status === "interrupted" ? " · 已中断" : a.status === "streaming" ? " · 生成中" : ""}
+                    {a.title ? ` · ${a.title.slice(0, 12)}` : ""}
+                  </button>
+                  {resumable ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelected(a.id);
+                        void resumeGeneration(a.id);
+                      }}
+                      disabled={generationRunning}
+                      title="在这条生成记录上继续生成（复用已保存的提纲与章节）"
+                      aria-label="继续生成此版本"
+                      className="inline-flex items-center gap-1 rounded-lg border border-gold/40 bg-gold/10 px-1.5 py-1 font-mono text-[10px] text-gold transition-colors hover:bg-gold/20 disabled:opacity-40"
+                    >
+                      <RotateCcw className="size-3" strokeWidth={1.5} />
+                      继续生成
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         </div>
       ) : null}
@@ -906,10 +947,30 @@ export function ArticlePanel({
           <p className="text-sm text-paper-dim">{active ? "上次生成未完成" : "还没有图文文章"}</p>
           <p className="max-w-xs text-xs leading-relaxed text-paper-faint">
             {active
-              ? "本次生成失败或中断，生成记录中留有尝试，可重新生成。"
+              ? "本次生成失败或中断，生成记录中留有尝试，可点对应记录继续生成，或重新生成。"
               : "基于转写稿与全景画面生成带章节、时间出处和内容导图的文章。"}
           </p>
-          {readerMode ? (
+          {activeResumable ? (
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => void resumeGeneration(activeResumable.id)}
+                disabled={generationRunning}
+                className="inline-flex items-center gap-2 rounded-xl border border-gold/40 bg-gold/10 px-4 py-2 font-mono text-[11px] tracking-wider text-gold transition-colors hover:bg-gold/20 disabled:opacity-40"
+              >
+                <RotateCcw className="size-3.5" strokeWidth={1.5} />
+                继续生成此版本
+              </button>
+              <button
+                type="button"
+                onClick={() => void generate()}
+                disabled={generationRunning}
+                className="inline-flex items-center gap-2 rounded-xl border border-tint/10 px-4 py-2 font-mono text-[11px] tracking-wider text-paper-faint transition-colors hover:border-gold/40 hover:text-gold disabled:opacity-40"
+              >
+                重新生成
+              </button>
+            </div>
+          ) : readerMode ? (
             <button
               type="button"
               onClick={() => void generate()}
