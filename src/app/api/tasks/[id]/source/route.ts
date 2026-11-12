@@ -1,9 +1,9 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { Readable } from "node:stream";
 import { sourcePath, taskDir } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
 import { deviceOwner } from "@/server/owner";
+import { nodeToWebStream } from "@/server/web-stream";
 
 
 export const runtime = "nodejs";
@@ -52,15 +52,9 @@ export async function GET(
         headers: { "content-range": `bytes */${info.size}` },
       });
     }
-    const stream = createReadStream(file, { start, end });
-    // 客户端中断后 toWeb 写已关闭的 controller 会抛 ERR_INVALID_STATE，
-    // 吞掉读取端错误避免 uncaughtException 打死进程
-    stream.on("error", () => {});
-    // node 侧 error 监听拦不住 web 侧适配器的 ERR_INVALID_STATE：
-    // abort 后在途数据仍会 enqueue 进已关闭的 controller（2026-10-29 16:31
-    // 的 uncaughtException 即此）。abort 时立刻销毁文件流，掐断在途写入。
-    req.signal.addEventListener("abort", () => stream.destroy(), { once: true });
-    return new Response(Readable.toWeb(stream) as ReadableStream, {
+    // 用自建桥而不是 Readable.toWeb：后者在客户端中断后会二次 close 已关闭的
+    // controller（ERR_INVALID_STATE 进程级异常，见 src/server/web-stream.ts）
+    return new Response(nodeToWebStream(createReadStream(file, { start, end })), {
       status: 206,
       headers: {
         "content-type": type,
@@ -71,11 +65,7 @@ export async function GET(
     });
   }
 
-  const stream = createReadStream(file);
-  stream.on("error", () => {});
-  // 同上：abort 即销毁，防止 toWeb 适配器写已关闭的 controller
-  req.signal.addEventListener("abort", () => stream.destroy(), { once: true });
-  return new Response(Readable.toWeb(stream) as ReadableStream, {
+  return new Response(nodeToWebStream(createReadStream(file)), {
     headers: {
       "content-type": type,
       "content-length": String(info.size),
