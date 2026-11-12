@@ -1,9 +1,9 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { Readable } from "node:stream";
 import { audioPath, taskDir } from "@/server/paths";
 import { getRuntime } from "@/server/runtime";
 import { deviceOwner } from "@/server/owner";
+import { nodeToWebStream } from "@/server/web-stream";
 
 
 export const runtime = "nodejs";
@@ -22,13 +22,9 @@ export async function GET(
   const info = await stat(file).catch(() => null);
   if (!info) return new Response("媒体已清理", { status: 410 });
 
-  const stream = createReadStream(file);
-  // 与 source 路由同理：node 侧吞错 + abort 即销毁，防止 toWeb 适配器
-  // 在客户端断开后往已关闭的 controller enqueue（ERR_INVALID_STATE）
-  stream.on("error", () => {});
-  req.signal.addEventListener("abort", () => stream.destroy(), { once: true });
-  // 整文件一次性返回（波形解码用），不支持 Range，故不声明 accept-ranges
-  return new Response(Readable.toWeb(stream) as ReadableStream, {
+  // 用自建桥而不是 Readable.toWeb：后者在客户端中断后会二次 close 已关闭的
+  // controller（ERR_INVALID_STATE 进程级异常，见 src/server/web-stream.ts）
+  return new Response(nodeToWebStream(createReadStream(file)), {
     headers: {
       "content-type": "audio/mpeg",
       "content-length": String(info.size),
