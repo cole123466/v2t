@@ -131,7 +131,13 @@ export default function TaskPage() {
       .then((r) => (r.ok ? r.json() : null))
       .then((t) => (t ? setTask(t) : setMissing(true)));
     const es = new EventSource(`/api/tasks/${id}/events`);
-    es.onmessage = (e) => setTask(JSON.parse(e.data) as Task);
+    es.onmessage = (e) => {
+      const next = JSON.parse(e.data) as Task;
+      setTask(next);
+      // 服务端在终态收流；不主动 close 的话 EventSource 会把「流结束」当断线，
+      // 每 3 秒自动重连一次，形成无限循环（日志里同一任务每 3 秒一条请求）
+      if (next.status === "ready" || next.status === "failed" || next.status === "canceled") es.close();
+    };
     return () => es.close();
   }, [id]);
 

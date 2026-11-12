@@ -30,7 +30,12 @@ export default function TaskReadPage() {
       .then((t) => (t ? setTask(t) : setMissing(true)))
       .catch(() => setMissing(true));
     const es = new EventSource("/api/tasks/" + id + "/events");
-    es.onmessage = (e) => setTask(JSON.parse(e.data) as Task);
+    es.onmessage = (e) => {
+      setTask(JSON.parse(e.data) as Task);
+      // 阅读视图只依赖首帧快照（就绪后本页才渲染）；服务端终态即收流，
+      // 不主动 close 会让 EventSource 每 3 秒自动重连一次
+      es.close();
+    };
     return () => es.close();
   }, [id]);
 
