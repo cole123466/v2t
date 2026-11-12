@@ -173,6 +173,49 @@ describe("createOpenAiCompatibleLlm 瞬断重试", () => {
     ).rejects.toThrow("terminated");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("上游 5xx 退避重试后成功", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    process.env.LLM_BASE_URL = "https://llm.test/v4";
+    process.env.LLM_MODEL = "test-model";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('{"code":50507,"message":"Request failed: Unknown error."}', { status: 500 }))
+      .mockResolvedValueOnce(sseResponse(["恢复"]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await createOpenAiCompatibleLlm().generate([{ role: "user", content: "hi" }], () => {});
+    expect(out).toBe("恢复");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("上游 429 余额不足不重试（重试只会再失败一次）", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    process.env.LLM_BASE_URL = "https://llm.test/v4";
+    process.env.LLM_MODEL = "test-model";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('{"error":{"code":"1113","message":"余额不足或无可用资源包,请充值。"}}', { status: 429 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      createOpenAiCompatibleLlm().generate([{ role: "user", content: "hi" }], () => {}),
+    ).rejects.toThrow("429");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("上游 5xx 连续失败时最多尝试三次", async () => {
+    process.env.LLM_API_KEY = "test-key";
+    process.env.LLM_BASE_URL = "https://llm.test/v4";
+    process.env.LLM_MODEL = "test-model";
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{"code":50507}', { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      createOpenAiCompatibleLlm().generate([{ role: "user", content: "hi" }], () => {}),
+    ).rejects.toThrow("500");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("带图消息走独立视觉服务商", () => {

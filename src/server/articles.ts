@@ -31,6 +31,9 @@ import {
 
 export type ArticleDetailLevel = "concise" | "standard" | "detailed";
 
+/** 单章生成的尝试次数：首次 + 2 次带纠错提示的重试 */
+const SECTION_ATTEMPTS = 3;
+
 /** 合法的深度取值（导入页与文章接口共用校验） */
 export const DETAIL_LEVELS: ArticleDetailLevel[] = ["concise", "standard", "detailed"];
 
@@ -396,7 +399,9 @@ export class ArticleService {
       runId: input.runId,
       signal: input.signal,
       resume: input.resume,
-      downgradeOnValidateFail: Boolean(input.resume),
+      // 终校验失败不再整篇丢弃：已生成内容入库并标记告警（用户可选继续修订）。
+      // resume 本来就是这个语义（08 号票），新生成同样处理，避免 20 分钟成果作废。
+      downgradeOnValidateFail: true,
       onProgress: input.onProgress,
       onDelta: input.onDelta,
       hooks: input.hooks,
@@ -602,7 +607,9 @@ export class ArticleService {
         let parsedBlocks: ArticleSection["blocks"] | null = null;
         let lastError: Error | null = null;
         let blockProblems: string[] = [];
-        for (let attempt = 0; attempt < 2 && !parsedBlocks; attempt++) {
+        // 模型结构缺陷（截断、块超配额、引用越界）有随机性：第三次尝试再失败才放弃，
+        // 成本约 1 分钟，远低于整篇作废（20 分钟）的代价
+        for (let attempt = 0; attempt < SECTION_ATTEMPTS && !parsedBlocks; attempt++) {
           const retryNote =
             attempt === 0
               ? ""
@@ -688,7 +695,7 @@ export class ArticleService {
         }
         if (!parsedBlocks || !parsed) {
           throw new Error(
-            `第 ${i + 1} 章《${section.title}》生成结果不合规（${lastError?.message ?? (blockProblems.join("；") || "未知原因")}），已重试一次仍失败，请重新生成`,
+            `第 ${i + 1} 章《${section.title}》生成结果不合规（${lastError?.message ?? (blockProblems.join("；") || "未知原因")}），已重试 ${SECTION_ATTEMPTS - 1} 次仍失败，请重新生成`,
           );
         }
         sections.push({
@@ -892,7 +899,7 @@ export class ArticleService {
           .map((p) => p.message)
           .join("；")}`;
         if (input.downgradeOnValidateFail) {
-          // resume 降级交付：已存章节不重校，失败只记录不阻塞（08 号票）
+          // 降级交付：失败只记录不阻塞（08 号票 resume / 新生成的兜底）
           steps?.finish(validateStep!.id, { ok: false, status: "failed", message: msg.slice(0, 200) });
           const publishStep = steps?.start({
             taskId: input.taskId,
@@ -906,7 +913,7 @@ export class ArticleService {
             content: article,
             status: "done",
             title: article.title,
-            error: `部分引用未通过校验：${problems.slice(0, 3).map((p) => p.message).join("；")}`,
+            error: `已交付，但校验存在告警：${problems.slice(0, 3).map((p) => p.message).join("；")}`,
           });
           steps?.finish(publishStep!.id, { ok: true, status: "completed" });
           return { ...record, outline, content: article, status: "done", title: article.title };

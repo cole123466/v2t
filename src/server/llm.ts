@@ -19,6 +19,44 @@ const TRANSIENT_NET_CODES = new Set([
   "UND_ERR_CONNECT_TIMEOUT",
 ]);
 
+/** 上游 5xx/429 的尝试次数：比网络瞬断多一次，组内路由有机会换到可用上游 */
+const HTTP_ATTEMPTS = 3;
+
+/** 重试也没有意义的 HTTP 失败：余额不足 / 无可用资源包 */
+const PERMANENT_HTTP = /余额不足|无可用资源包|insufficient_quota|"code"\s*:\s*"?1113/;
+
+/** 带状态码的上游失败：让 generate 能按 429/5xx 决定是否退避重试 */
+class LlmHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = "LlmHttpError";
+  }
+}
+
+/** 退避时长：第一次重试立即，之后 1s、2s（只对 5xx/429 生效） */
+function backoffMs(attempt: number): number {
+  return attempt <= 0 ? 0 : 1000 * 2 ** (attempt - 1);
+}
+
+/** 可被 abort 打断的退避等待：客户端取消后不必再等 */
+async function backoff(attempt: number, signal?: AbortSignal): Promise<void> {
+  const ms = backoffMs(attempt);
+  if (ms === 0) return;
+  await new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
 /**
  * 网络瞬断判定：undici 连接层失败的 message 恒为 "fetch failed"（连接期）或
  * "terminated"（流中期），真实原因（ECONNRESET/ETIMEDOUT 等）在 cause 链上，
@@ -49,27 +87,47 @@ export function createOpenAiCompatibleLlm(): LLMProvider {
       onChunk: (delta: string) => void,
       meta?: LLMCallMeta,
     ): Promise<string> {
-      // 个别模型只输出思维链不出正文、或到上游的网络瞬断（ETIMEDOUT 等）：
-      // 自动重试一次，仍失败才报错。上游 5xx/429 交给调用方感知，不在本层静默重试
+      // 三类可重试失败：
+      // - 空正文（模型只出思维链）
+      // - 连接层瞬断（ETIMEDOUT/ECONNRESET 等）：预算 2 次
+      // - 上游 429/5xx：预算 3 次并指数退避（组内路由可能换到可用上游）
+      // 余额不足（code 1113）、404 模型不存在、401 等永久性失败不重试
       let lastError: Error | null = null;
-      for (let attempt = 0; attempt < 2; attempt++) {
+      let maxAttempts = 2;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
           return await streamOnce(messages, onChunk, meta);
         } catch (err) {
           lastError = err instanceof Error ? err : new Error(String(err));
           const empty = /没有返回正文内容/.test(lastError.message);
+          const http = lastError instanceof LlmHttpError ? lastError : null;
+          const retryableHttp = http?.retryable ?? false;
           // 已输出部分正文的流中断不重试（会内容重复），其余瞬断走 cause 链判定
           const transient =
+            !http &&
             isTransientNetworkError(lastError) &&
             !(lastError as Error & { partialEmitted?: boolean }).partialEmitted;
-          if (!empty && !transient) throw lastError;
-          logWarn(empty ? "model response empty; retrying" : "model request transient failure; retrying", {
-            provider: "llm",
-            operation: meta?.operation,
-            task_id: meta?.taskId,
-            trace_id: meta?.traceId,
-            attempt: attempt + 1,
-          });
+          if (!empty && !transient && !retryableHttp) throw lastError;
+          if (retryableHttp) maxAttempts = HTTP_ATTEMPTS;
+          if (attempt + 1 >= maxAttempts) break;
+          logWarn(
+            empty
+              ? "model response empty; retrying"
+              : retryableHttp
+                ? "model service HTTP failure; retrying"
+                : "model request transient failure; retrying",
+            {
+              provider: "llm",
+              operation: meta?.operation,
+              task_id: meta?.taskId,
+              trace_id: meta?.traceId,
+              attempt: attempt + 1,
+              http_status: http?.status,
+              delay_ms: attempt === 0 ? 0 : backoffMs(attempt),
+            },
+          );
+          await backoff(attempt, meta?.signal);
+          if (meta?.signal?.aborted) throw lastError;
         }
       }
       throw lastError ?? new Error("LLM 调用失败");
@@ -130,7 +188,14 @@ async function streamOnce(
       http_status: res.status,
       duration_ms: elapsedMs(startedAt),
     });
-    throw new Error(`LLM 服务返回 ${res.status}：${detail.slice(0, 200)}`);
+    // 429/5xx 多是上游实例抖动或组内无可用资源，退避重试可能落到别的上游；
+    // 余额不足这类永久失败重试只是浪费一次完整等待
+    const retryable = (res.status === 429 || res.status >= 500) && !PERMANENT_HTTP.test(detail);
+    throw new LlmHttpError(
+      res.status,
+      `LLM 服务返回 ${res.status}：${detail.slice(0, 200)}`,
+      retryable,
+    );
   }
 
   const reader = res.body.getReader();
