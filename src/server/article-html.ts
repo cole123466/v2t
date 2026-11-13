@@ -8,7 +8,7 @@ import {
   type MindMapNode,
 } from "./article";
 import { clock, type ExportCitation } from "./export";
-import { renderMindMapSvg } from "./mindmap-svg";
+import { renderMindMapForExport } from "./mindmap-svg";
 
 /**
  * 文章 HTML 导出：把结构化文章渲染成自包含、带打印样式的单页 HTML。
@@ -467,6 +467,11 @@ tbody tr:nth-child(even){background:rgb(250 246 238 / .55)}
    不要再写 width:100%/height:auto：那会让浏览器按 viewBox 比例把高度推回容器宽度对应值，
    突破封顶高度；.mindmap/.mindmap-figure 又设了 break-inside:avoid，导图下半页会被裁掉。 */
 .mindmap-figure svg{display:block;max-width:100%;margin:0 auto}
+/* 导图按顶层主题分页：每页一个独立 SVG，页与页之间靠打印分页符断开 */
+.mindmap-pages{margin:0 auto}
+.mindmap-page{margin:0 0 12px}
+.mindmap-page-label{font-size:12px;color:#666;text-align:center;margin:4px 0 2px}
+.mindmap-notice{font-size:13px;color:#8a4b00;text-align:center;margin:8px 0}
 .mindmap-outline-title{
   margin:14px 0 6px;
   font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
@@ -525,7 +530,12 @@ footer{
   a{color:inherit;text-decoration:none}
   .cite{color:#7a5a12}
   .article>section+section{border-top-color:#ddd}
-  .figure,.table-wrap,.code,blockquote,.toc,.mindmap,.mindmap-figure,.limitations{break-inside:avoid}
+  .figure,.table-wrap,.code,blockquote,.toc,.limitations{break-inside:avoid}
+  /* 导图（含外框）必须允许跨页断开，否则整块被推到下一页留下半页空白；
+     真正的分页单位下沉到 .mindmap-page */
+  .mindmap,.mindmap-figure{break-inside:auto}
+  .mindmap-page{break-inside:avoid;break-after:page}
+  .mindmap-page:last-child{break-after:auto}
   .mindmap-figure svg{print-color-adjust:exact;-webkit-print-color-adjust:exact}
 }
 @page{size:A4;margin:18mm 16mm}
@@ -617,14 +627,19 @@ ${section.blocks.map((block) => renderBlock(block, ctx)).filter(Boolean).join("\
 
   let mindMap = "";
   if (article.mindMap.length > 0) {
-    // 完整树状导图用静态 SVG 呈现（与工作台「查看完整导图」同布局），
-    // 文字大纲保留在下方：文本可选中、无障碍回退，也保留 #section-N 跳转
-    const mindMapSvg = renderMindMapSvg(
+    // 完整树状导图用静态 SVG 呈现（与工作台「查看完整导图」同布局），按顶层主题分页，
+    // 每页独立缩放以保证字号可读；文字大纲保留在下方：文本可选中、无障碍回退，
+    // 也保留 #section-N 跳转。提示放在 figure 顶部，同时覆盖 SVG 与大纲。
+    const mind = renderMindMapForExport(
       article.mindMap,
       article.title || "内容导图",
       sectionNumber,
     );
-    const figure = mindMapSvg ? `<div class="mindmap-figure">${mindMapSvg}</div>` : "";
+    const notice = mind.notice
+      ? `<p class="mindmap-notice" role="note">${escapeHtml(mind.notice)}</p>`
+      : "";
+    const figure =
+      notice || mind.html ? `<div class="mindmap-figure">${notice}${mind.html}</div>` : "";
     mindMap = `<section class="mindmap"><p class="mindmap-title">内容导图</p>${figure}<p class="mindmap-outline-title">文字大纲</p>${renderMindMap(
       article.mindMap,
       sectionNumber,
