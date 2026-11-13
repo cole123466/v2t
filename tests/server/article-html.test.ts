@@ -164,6 +164,121 @@ describe("内容导图 SVG", () => {
   });
 });
 
+const allSvgs = (out: string): string[] =>
+  Array.from(out.matchAll(/<svg[\s\S]*?<\/svg>/g), (m) => m[0]);
+
+type SvgBox = { width: number; height: number; viewBoxWidth: number; viewBoxHeight: number };
+
+const boxOf = (svg: string): SvgBox => {
+  const size = svg.match(/<svg[^>]* width="(\d+)" height="(\d+)"/);
+  const box = svg.match(/viewBox="0 0 ([\d.]+) ([\d.]+)"/);
+  expect(size).not.toBeNull();
+  expect(box).not.toBeNull();
+  return {
+    width: Number(size![1]),
+    height: Number(size![2]),
+    viewBoxWidth: Number(box![1]),
+    viewBoxHeight: Number(box![2]),
+  };
+};
+
+/** 顶层主题标签（T01…），子级标签形如「T01 子 1」，不会被计入 */
+const topicLabels = (text: string): string[] =>
+  Array.from(text.matchAll(/>T(\d{2})</g), (m) => `T${m[1]}`);
+
+const gridMindMap = (topicCount: number, childCount: number): Article["mindMap"] =>
+  Array.from({ length: topicCount }, (_, i) => {
+    const name = `T${String(i + 1).padStart(2, "0")}`;
+    return {
+      label: name,
+      children: Array.from({ length: childCount }, (_, j) => ({ label: `${name} 子 ${j + 1}` })),
+    };
+  });
+
+describe("导图分页与完整性", () => {
+  it("8 主题 × 4 子题：分多页，每页字号达标且尺寸不超上限", () => {
+    const out = renderWith(gridMindMap(8, 4));
+    const svgs = allSvgs(out);
+    expect(svgs.length).toBeGreaterThan(1);
+    expect(Array.from(out.matchAll(/class="mindmap-page"/g))).toHaveLength(svgs.length);
+
+    const seen = new Set<string>();
+    for (const svg of svgs) {
+      const box = boxOf(svg);
+      expect(box.width).toBeLessThanOrEqual(640);
+      expect(box.height).toBeLessThanOrEqual(820);
+      // 打印尺寸是 viewBox 的等比缩放（属性取整，留 0.01 误差）
+      const scale = box.width / box.viewBoxWidth;
+      expect(Math.abs(scale - box.height / box.viewBoxHeight)).toBeLessThan(0.01);
+      const fontSize = Number(svg.match(/<text[^>]*font-size="(\d+)"/)![1]);
+      // 有效字号下限 9px；width 属性取整会带来 <0.02px 误差
+      expect(fontSize * scale).toBeGreaterThanOrEqual(8.95);
+      expect(scale).toBeGreaterThanOrEqual(9 / 14 - 0.002);
+      for (const label of topicLabels(svg)) seen.add(label);
+    }
+    // 各页主题数之和 == 输入主题数（无重复无遗漏）
+    expect(seen.size).toBe(8);
+  });
+
+  it(">96 节点（90 主题 × 1 子）：SVG 主题数与文字大纲一致，无静默截断", () => {
+    const out = renderWith(gridMindMap(90, 1));
+    const svgs = allSvgs(out);
+    expect(svgs.length).toBeGreaterThan(0);
+    expect(out).not.toContain('class="mindmap-notice"');
+
+    const inSvg = new Set(svgs.flatMap((svg) => topicLabels(svg)));
+    const outline = out.slice(out.indexOf('<p class="mindmap-outline-title">文字大纲</p>'));
+    const inOutline = new Set(topicLabels(outline));
+    expect(inSvg.size).toBe(90);
+    expect(inOutline.size).toBe(90);
+    expect([...inSvg].sort()).toEqual([...inOutline].sort());
+  });
+
+  it("小导图保持单 SVG，不加分页包裹与页码标注", () => {
+    const out = renderWith(gridMindMap(3, 2));
+    expect(allSvgs(out)).toHaveLength(1);
+    expect(out).not.toContain('class="mindmap-page"');
+    expect(out).not.toContain('class="mindmap-pages"');
+    expect(out).not.toMatch(/第\s*1\s*\/\s*1\s*页/);
+  });
+
+  it("打印样式：每页 break-inside:avoid 且最后一页不强制分页", () => {
+    const out = renderWith(gridMindMap(8, 4));
+    expect(out).toContain(".mindmap-page{break-inside:avoid;break-after:page}");
+    expect(out).toContain(".mindmap-page:last-child{break-after:auto}");
+    // 外框不能整块 avoid，否则分页会被推成一整页
+    expect(out).toMatch(/\.mindmap-figure\{break-inside:auto\}/);
+  });
+
+  it("所需页数超过 20 页时截到 20 页并给出显式提示", () => {
+    const out = renderWith(gridMindMap(90, 4));
+    expect(allSvgs(out)).toHaveLength(20);
+    const notice = out.match(/<p class="mindmap-notice"[^>]*>([^<]*)<\/p>/);
+    expect(notice).not.toBeNull();
+    expect(notice![1]).toContain("完整结构");
+    // 文字大纲仍全量，不随 SVG 截断
+    const outline = out.slice(out.indexOf('<p class="mindmap-outline-title">文字大纲</p>'));
+    const inOutline = new Set(topicLabels(outline));
+    expect(inOutline.size).toBe(90);
+  });
+
+  it("超过导出硬上限时给出明确提示，不输出部分 SVG", () => {
+    const huge = Array.from({ length: 2100 }, (_, i) => ({ label: `主题 ${i + 1}` }));
+    const out = renderWith(huge);
+    expect(allSvgs(out)).toHaveLength(0);
+    const notice = out.match(/<p class="mindmap-notice"[^>]*>([^<]*)<\/p>/);
+    expect(notice).not.toBeNull();
+    expect(notice![1]).toContain("完整结构");
+    // 提示在文字大纲之前，SVG 与大纲都有提示
+    expect(out.indexOf('class="mindmap-notice"')).toBeLessThan(
+      out.indexOf('class="mindmap-outline-title"'),
+    );
+    // 大纲仍是全量
+    expect(out).toContain("<span>主题 1</span>");
+    expect(out).toContain("<span>主题 2100</span>");
+  });
+});
+
 describe("HTML 导出", () => {
   it("是自包含 HTML，带 A4 打印样式", () => {
     expect(html.startsWith("<!doctype html>")).toBe(true);

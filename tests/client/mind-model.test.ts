@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { MindMapNode } from "@/server/article";
 import {
   ancestorPath,
+  countMindNodes,
   estimateNodeBox,
   estimateReaderBox,
   indexTree,
   layoutMind,
   mindMove,
+  MIND_MAX_DEPTH,
   MIND_MAX_NODES,
   nodeForSection,
   overviewMind,
@@ -61,6 +63,42 @@ describe("indexTree 适配", () => {
     const kids: MindMapNode[] = Array.from({ length: 120 }, (_, i) => ({ label: `n${i}` }));
     const index = indexTree([{ label: "root", children: kids }], "t", sections);
     expect(index.nodes.size).toBe(MIND_MAX_NODES);
+  });
+
+  it("不传 limits 时默认上限不变（96 节点 / 6 层）", () => {
+    const kids: MindMapNode[] = Array.from({ length: 120 }, (_, i) => ({ label: `n${i}` }));
+    const index = indexTree([{ label: "root", children: kids }], "t", sections);
+    expect(index.nodes.size).toBe(96);
+    let deep: MindMapNode = { label: "L10" };
+    for (let i = 9; i >= 1; i--) deep = { label: `L${i}`, children: [deep] };
+    const chain = indexTree([{ label: "L0", children: [deep] }], "t", sections);
+    expect(chain.nodes.has(`p0${"-0".repeat(MIND_MAX_DEPTH)}`)).toBe(true);
+    expect(chain.nodes.has(`p0${"-0".repeat(MIND_MAX_DEPTH + 1)}`)).toBe(false);
+  });
+
+  it("放宽 limits 后保留更多节点与更深层级", () => {
+    const kids: MindMapNode[] = Array.from({ length: 120 }, (_, i) => ({ label: `n${i}` }));
+    const index = indexTree([{ label: "root", children: kids }], "t", sections, {
+      maxNodes: 2000,
+    });
+    // 虚拟 root + root + 120 个子节点
+    expect(index.nodes.size).toBe(122);
+    let deep: MindMapNode = { label: "L10" };
+    for (let i = 9; i >= 1; i--) deep = { label: `L${i}`, children: [deep] };
+    const chain = indexTree([{ label: "L0", children: [deep] }], "t", sections, { maxDepth: 8 });
+    expect(chain.nodes.has(`p0${"-0".repeat(8)}`)).toBe(true);
+    expect(chain.nodes.has(`p0${"-0".repeat(9)}`)).toBe(false);
+  });
+
+  it("countMindNodes 统计全量节点（忽略上限，空 label 不计）", () => {
+    expect(
+      countMindNodes([
+        { label: "a", children: [{ label: "b" }, { label: "  " }] },
+        { label: "c" },
+      ]),
+    ).toBe(3);
+    const kids: MindMapNode[] = Array.from({ length: 120 }, (_, i) => ({ label: `n${i}` }));
+    expect(countMindNodes([{ label: "root", children: kids }])).toBe(121);
   });
 });
 
