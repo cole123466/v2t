@@ -463,7 +463,10 @@ tbody tr:nth-child(even){background:rgb(250 246 238 / .55)}
 .mindmap a{color:var(--dim);text-decoration:none}
 .mindmap a:hover{color:var(--gold)}
 .mindmap-figure{margin:0 0 12px}
-.mindmap-figure svg{display:block;width:100%;max-width:100%;height:auto}
+/* 尺寸由 SVG 自身的 width/height 属性决定（服务端已按 A4 等比缩放并封顶）。
+   不要再写 width:100%/height:auto：那会让浏览器按 viewBox 比例把高度推回容器宽度对应值，
+   突破封顶高度；.mindmap/.mindmap-figure 又设了 break-inside:avoid，导图下半页会被裁掉。 */
+.mindmap-figure svg{display:block;max-width:100%;margin:0 auto}
 .mindmap-outline-title{
   margin:14px 0 6px;
   font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;

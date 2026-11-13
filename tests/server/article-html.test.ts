@@ -122,6 +122,33 @@ describe("内容导图 SVG", () => {
     expect(height).toBeLessThanOrEqual(820);
   });
 
+  it("导图 SVG 尺寸由属性决定，CSS 不铺满容器（防止 PDF 超出单页）", () => {
+    const out = renderWith([
+      { label: "根", children: [{ label: "主题甲", children: [{ label: "子级乙" }] }] },
+    ]);
+    // 服务端按 A4 等比缩放后把尺寸写进 SVG 的 width/height 属性。
+    // 若 CSS 再写 width:100%/height:auto，浏览器会按 viewBox 比例把高度推回容器宽度对应值，
+    // 突破封顶高度；.mindmap/.mindmap-figure 又设了 break-inside:avoid，导图下半部分会被裁掉。
+    const rules = Array.from(out.matchAll(/\.mindmap-figure svg\{([^}]*)\}/g), (m) => m[1]);
+    expect(rules.length).toBeGreaterThan(0);
+    for (const rule of rules) {
+      expect(rule).not.toMatch(/(?:^|;)\s*width\s*:\s*100%/);
+      expect(rule).not.toMatch(/(?:^|;)\s*height\s*:\s*auto/);
+    }
+    expect(rules[0]).toContain("max-width:100%");
+    const svg = svgOf(out);
+    const size = svg.match(/<svg[^>]* width="(\d+)" height="(\d+)"/);
+    const box = svg.match(/viewBox="0 0 ([\d.]+) ([\d.]+)"/);
+    expect(size).not.toBeNull();
+    expect(box).not.toBeNull();
+    const width = Number(size![1]);
+    const height = Number(size![2]);
+    expect(width).toBeLessThanOrEqual(640);
+    expect(height).toBeLessThanOrEqual(820);
+    // 属性尺寸必须是 viewBox 的等比缩放，保证高度封顶真实生效
+    expect(Math.abs(width / Number(box![1]) - height / Number(box![2]))).toBeLessThan(0.01);
+  });
+
   it("大导图（90 主题）也能容纳且不超上限", () => {
     const mindMap = Array.from({ length: 90 }, (_, i) => ({
       label: `主题 ${i + 1}`,
