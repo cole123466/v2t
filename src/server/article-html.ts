@@ -8,6 +8,7 @@ import {
   type MindMapNode,
 } from "./article";
 import { clock, type ExportCitation } from "./export";
+import { renderMindMapSvg } from "./mindmap-svg";
 
 /**
  * 文章 HTML 导出：把结构化文章渲染成自包含、带打印样式的单页 HTML。
@@ -461,6 +462,18 @@ tbody tr:nth-child(even){background:rgb(250 246 238 / .55)}
 .mindmap li{margin:0 0 .35em}
 .mindmap a{color:var(--dim);text-decoration:none}
 .mindmap a:hover{color:var(--gold)}
+.mindmap-figure{margin:0 0 12px}
+/* 尺寸由 SVG 自身的 width/height 属性决定（服务端已按 A4 等比缩放并封顶）。
+   不要再写 width:100%/height:auto：那会让浏览器按 viewBox 比例把高度推回容器宽度对应值，
+   突破封顶高度；.mindmap/.mindmap-figure 又设了 break-inside:avoid，导图下半页会被裁掉。 */
+.mindmap-figure svg{display:block;max-width:100%;margin:0 auto}
+.mindmap-outline-title{
+  margin:14px 0 6px;
+  font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:11px;
+  letter-spacing:.16em;
+  color:var(--faint);
+}
 .limitations{
   margin:2.4em 0 0;
   padding:18px 22px;
@@ -512,7 +525,8 @@ footer{
   a{color:inherit;text-decoration:none}
   .cite{color:#7a5a12}
   .article>section+section{border-top-color:#ddd}
-  .figure,.table-wrap,.code,blockquote,.toc,.mindmap,.limitations{break-inside:avoid}
+  .figure,.table-wrap,.code,blockquote,.toc,.mindmap,.mindmap-figure,.limitations{break-inside:avoid}
+  .mindmap-figure svg{print-color-adjust:exact;-webkit-print-color-adjust:exact}
 }
 @page{size:A4;margin:18mm 16mm}
 `;
@@ -601,13 +615,21 @@ ${section.blocks.map((block) => renderBlock(block, ctx)).filter(Boolean).join("\
           .join("")}</ol></section>`
       : "";
 
-  const mindMap =
-    article.mindMap.length > 0
-      ? `<section class="mindmap"><p class="mindmap-title">内容导图</p>${renderMindMap(
-          article.mindMap,
-          sectionNumber,
-        )}</section>`
-      : "";
+  let mindMap = "";
+  if (article.mindMap.length > 0) {
+    // 完整树状导图用静态 SVG 呈现（与工作台「查看完整导图」同布局），
+    // 文字大纲保留在下方：文本可选中、无障碍回退，也保留 #section-N 跳转
+    const mindMapSvg = renderMindMapSvg(
+      article.mindMap,
+      article.title || "内容导图",
+      sectionNumber,
+    );
+    const figure = mindMapSvg ? `<div class="mindmap-figure">${mindMapSvg}</div>` : "";
+    mindMap = `<section class="mindmap"><p class="mindmap-title">内容导图</p>${figure}<p class="mindmap-outline-title">文字大纲</p>${renderMindMap(
+      article.mindMap,
+      sectionNumber,
+    )}</section>`;
+  }
 
   const limitations =
     article.limitations.length > 0
