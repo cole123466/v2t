@@ -10,6 +10,7 @@ import { ProcessPanel } from "@/components/workbench/process-panel";
 import { SourceNotice } from "@/components/workbench/source-notice";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { PetToggle } from "@/components/pet/pet-toggle";
+import { isTaskTerminal } from "@/lib/task-status";
 
 /**
  * 阅读视图（票 B，vid-lens ReadView 对齐）：图文为主体，过程收进抽屉。
@@ -30,7 +31,12 @@ export default function TaskReadPage() {
       .then((t) => (t ? setTask(t) : setMissing(true)))
       .catch(() => setMissing(true));
     const es = new EventSource("/api/tasks/" + id + "/events");
-    es.onmessage = (e) => setTask(JSON.parse(e.data) as Task);
+    es.onmessage = (e) => {
+      const t = JSON.parse(e.data) as Task;
+      setTask(t);
+      // 阅读页只需一次终态快照；收到即关闭，避免服务端收流后每 3 秒重连
+      if (isTaskTerminal(t.status)) es.close();
+    };
     return () => es.close();
   }, [id]);
 

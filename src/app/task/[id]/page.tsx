@@ -32,6 +32,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { PetToggle } from "@/components/pet/pet-toggle";
 import { clock } from "@/lib/time";
 import { failureHint } from "@/lib/failure-hint";
+import { isTaskTerminal } from "@/lib/task-status";
 import type { QaContext } from "@/server/qa";
 
 const STAGES = [
@@ -131,7 +132,12 @@ export default function TaskPage() {
       .then((r) => (r.ok ? r.json() : null))
       .then((t) => (t ? setTask(t) : setMissing(true)));
     const es = new EventSource(`/api/tasks/${id}/events`);
-    es.onmessage = (e) => setTask(JSON.parse(e.data) as Task);
+    es.onmessage = (e) => {
+      const t = JSON.parse(e.data) as Task;
+      setTask(t);
+      // 终态后服务端已收流；不主动 close 会把流结束当断线，每 3 秒重连一次
+      if (isTaskTerminal(t.status)) es.close();
+    };
     return () => es.close();
   }, [id]);
 

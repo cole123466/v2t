@@ -15,6 +15,14 @@ export function isProcessing(status: TaskStatus): boolean {
   );
 }
 
+/**
+ * 任务是否进入终态。与 SSE 服务端收流条件保持一致：服务端在终态 close 流，
+ * 浏览器会把「流结束」当断线并每 3 秒重连，客户端须在收到终态快照时 close。
+ */
+export function isTaskTerminal(status: TaskStatus): boolean {
+  return status === "ready" || status === "failed" || status === "canceled";
+}
+
 export const STATUS_LABEL: Record<TaskStatus, string> = {
   queued: "排队中",
   downloading: "下载中",
