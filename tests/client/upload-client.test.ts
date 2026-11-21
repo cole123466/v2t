@@ -27,6 +27,9 @@ class FakeXhr {
   progress(loaded: number, total: number) {
     this.upload.onprogress?.({ lengthComputable: true, loaded, total });
   }
+  progressUnknownLength(loaded: number) {
+    this.upload.onprogress?.({ lengthComputable: false, loaded, total: 0 });
+  }
   complete(status = 201, responseText = "{}") {
     if (this.timer) clearTimeout(this.timer);
     this.status = status;
@@ -66,6 +69,17 @@ describe("上传超时判定", () => {
     xhr.complete(201);
     expect(onError).not.toHaveBeenCalled();
     expect(onSuccess).toHaveBeenCalledOnce();
+  });
+
+  it("总长度未知时仍用停滞窗口，不误放宽到响应窗口", () => {
+    vi.useFakeTimers();
+    const { xhr, onError } = setup({ stallMs: 120_000, responseMs: 300_000 });
+    vi.advanceTimersByTime(60_000);
+    xhr.progressUnknownLength(50); // lengthComputable=false、total=0
+    vi.advanceTimersByTime(119_000);
+    expect(onError).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1_000);
+    expect(onError).toHaveBeenCalledWith(UPLOAD_TIMEOUT_MESSAGE);
   });
 
   it("连续无进展达到停滞窗口才判超时", () => {

@@ -67,8 +67,11 @@ export function sendUpload(options: UploadClientOptions): () => void {
     if (e.lengthComputable && e.total > 0) {
       onProgress(Math.min(100, (e.loaded / e.total) * 100));
     }
-    // 字节还在走就顺延；全部字节发完后改等响应，给更宽松的窗口
-    armWatchdog(e.loaded >= e.total ? responseMs : stallMs);
+    // 字节还在走就顺延；只有确认字节全部发完才改等响应（更宽松的窗口）。
+    // lengthComputable=false 时 total=0，loaded>=total 恒真，必须排除，否则慢速上传
+    // 的每个进度都会把 2 分钟停滞窗口误放宽成 5 分钟响应窗口。
+    const uploadDone = e.lengthComputable && e.total > 0 && e.loaded >= e.total;
+    armWatchdog(uploadDone ? responseMs : stallMs);
   };
   xhr.onload = () => {
     if (settled) return;
