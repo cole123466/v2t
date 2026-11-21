@@ -28,6 +28,42 @@ export interface MindIndex {
 export const MIND_MAX_DEPTH = 6;
 export const MIND_MAX_NODES = 96;
 
+/** `indexTree` 的可选上限；不传时沿用 `MIND_MAX_NODES` / `MIND_MAX_DEPTH` */
+export interface TreeLimits {
+  /** 索引节点总数上限（含虚拟 root） */
+  maxNodes?: number;
+  /** 最大深度（虚拟 root 为 0，顶层主题为 1） */
+  maxDepth?: number;
+}
+
+/**
+ * 导出路径的硬上限：文章本身受 `ARTICLE_MAX_DEPTH=3` 约束，这里只防病态数据
+ * 撑爆布局；超过时由调用方给出显式提示，而不是静默截断。
+ */
+export const MIND_EXPORT_MAX_NODES = 2000;
+export const MIND_EXPORT_MAX_DEPTH = 8;
+export const MIND_EXPORT_LIMITS: TreeLimits = {
+  maxNodes: MIND_EXPORT_MAX_NODES,
+  maxDepth: MIND_EXPORT_MAX_DEPTH,
+};
+
+/**
+ * 统计原始导图树的节点数（忽略深度/节点上限，空 label 不计，与 `indexTree` 同口径）。
+ * 导出侧用它判断全量渲染是否被硬上限截断。
+ */
+export function countMindNodes(roots: MindMapNode[]): number {
+  let count = 0;
+  const walk = (list: MindMapNode[]) => {
+    for (const node of list) {
+      if (!node.label?.trim()) continue;
+      count += 1;
+      if (node.children?.length) walk(node.children);
+    }
+  };
+  walk(roots);
+  return count;
+}
+
 /**
  * 把多根的 MindMapNode[] 合成为带虚拟 root 的扁平索引。
  * sectionIds 是存在章节的白名单；不在白名单的 sectionId 一律视为分组节点。
@@ -36,7 +72,10 @@ export function indexTree(
   roots: MindMapNode[],
   rootLabel: string,
   sectionIds: ReadonlySet<string>,
+  limits?: TreeLimits,
 ): MindIndex {
+  const maxNodes = limits?.maxNodes ?? MIND_MAX_NODES;
+  const maxDepth = limits?.maxDepth ?? MIND_MAX_DEPTH;
   const nodes = new Map<string, MindNode>();
   const rootId = "p0";
   nodes.set(rootId, {
@@ -50,9 +89,9 @@ export function indexTree(
 
   let count = 1;
   const walk = (list: MindMapNode[], parentId: string, depth: number) => {
-    if (depth > MIND_MAX_DEPTH) return;
+    if (depth > maxDepth) return;
     list.forEach((node, i) => {
-      if (count >= MIND_MAX_NODES) return;
+      if (count >= maxNodes) return;
       if (!node.label?.trim()) return;
       const id = `${parentId}-${i}`;
       const sectionId =
