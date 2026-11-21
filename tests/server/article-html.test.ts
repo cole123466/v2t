@@ -248,6 +248,8 @@ describe("导图分页与完整性", () => {
     expect(out).toContain(".mindmap-page:last-child{break-after:auto}");
     // 外框不能整块 avoid，否则分页会被推成一整页
     expect(out).toMatch(/\.mindmap-figure\{break-inside:auto\}/);
+    // 单页裸 svg 没有 .mindmap-page 包裹，必须单独 keep-together
+    expect(out).toContain(".mindmap-figure>svg{break-inside:avoid}");
   });
 
   it("所需页数超过 20 页时截到 20 页并给出显式提示", () => {
@@ -276,6 +278,14 @@ describe("导图分页与完整性", () => {
     // 大纲仍是全量
     expect(out).toContain("<span>主题 1</span>");
     expect(out).toContain("<span>主题 2100</span>");
+  });
+
+  it("恰好 2000 节点（上限内）仍完整渲染，不被第二道闸门误判超限", () => {
+    const out = renderWith(gridMindMap(1000, 1));
+    expect(allSvgs(out).length).toBeGreaterThan(0);
+    const notice = out.match(/<p class="mindmap-notice"[^>]*>([^<]*)<\/p>/);
+    // 只应有「页数超过上限」的分页提示，不应有「过大或层级过深，未能完整渲染」
+    if (notice) expect(notice![1]).not.toContain("未能完整渲染");
   });
 });
 

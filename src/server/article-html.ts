@@ -536,6 +536,9 @@ footer{
   .mindmap,.mindmap-figure{break-inside:auto}
   .mindmap-page{break-inside:avoid;break-after:page}
   .mindmap-page:last-child{break-after:auto}
+  /* 单页导图是裸 svg 元素（无 .mindmap-page 包裹），需单独 keep-together，
+     否则打印时会被从中间切断；多页路径已由 .mindmap-page 保证不跨页断开 */
+  .mindmap-figure>svg{break-inside:avoid}
   .mindmap-figure svg{print-color-adjust:exact;-webkit-print-color-adjust:exact}
 }
 @page{size:A4;margin:18mm 16mm}

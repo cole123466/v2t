@@ -292,7 +292,13 @@ export function renderMindMapForExport(
     };
   }
 
-  const index = indexTree(nodes, rootLabel, new Set(sectionNumber.keys()), MIND_EXPORT_LIMITS);
+  const index = indexTree(nodes, rootLabel, new Set(sectionNumber.keys()), {
+    ...MIND_EXPORT_LIMITS,
+    // indexTree 的 maxNodes 含虚拟 root（从 1 起数），而上面的首道闸门按正文节点数
+    // 放行到 MIND_EXPORT_MAX_NODES；这里 +1 才能让恰好 2000 个正文节点完整索引，
+    // 否则会被第二道闸门误判为超限（老口径实际只能渲染 1999）。
+    maxNodes: MIND_EXPORT_MAX_NODES + 1,
+  });
   if (index.nodes.size - 1 < nodeCount) {
     // 超过导出硬上限（层级或节点数）时不做部分渲染，避免 SVG 与文字大纲不一致
     return {
