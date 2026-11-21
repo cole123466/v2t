@@ -19,6 +19,7 @@ import {
 import { QueuePanel } from "@/components/studio/queue-panel";
 import { useQueueSnapshot } from "@/hooks/use-tasks";
 import { petFlow } from "@/components/pet/pet-flow";
+import { sendUpload as sendFileUpload } from "@/lib/upload-client";
 
 /** 导入页：拖拽上传、链接导入与当前队列；任务列表见 /studio/tasks */
 export default function StudioPage() {
@@ -116,52 +117,28 @@ export default function StudioPage() {
   const sendUpload = useCallback(
     (item: UploadItem, file: File) =>
       new Promise<boolean>((resolve) => {
-        const xhr = new XMLHttpRequest();
         const query = new URLSearchParams({
           name: file.name,
           detailLevel: detail,
           ...(purpose.trim() ? { purpose: purpose.trim() } : {}),
         });
-        xhr.open("POST", `/api/upload?${query.toString()}`);
-        xhr.setRequestHeader("content-type", "application/octet-stream");
-        xhr.timeout = 30 * 60 * 1000;
-        xhr.upload.onprogress = (e) => {
-          if (!e.lengthComputable) return;
-          uploadQueue.current = setUploadProgress(
-            uploadQueue.current,
-            item.id,
-            (e.loaded / e.total) * 100,
-          );
-          syncUploads();
-        };
-        xhr.onload = () => {
-          if (xhr.status === 201) {
+        sendFileUpload({
+          url: `/api/upload?${query.toString()}`,
+          file,
+          onProgress: (pct) => {
+            uploadQueue.current = setUploadProgress(uploadQueue.current, item.id, pct);
+            syncUploads();
+          },
+          onSuccess: () => {
             // 服务端已落库为 queued：拉一次权威队列快照，让新任务立刻出现在队列面板
             void refreshQueue();
             resolve(true);
-            return;
-          }
-          try {
-            setError((JSON.parse(xhr.responseText) as { error: string }).error);
-          } catch {
-            setError(`上传失败（${xhr.status}）`);
-          }
-          resolve(false);
-        };
-        xhr.onerror = () => {
-          setError("网络中断，上传失败");
-          resolve(false);
-        };
-        xhr.ontimeout = () => {
-          setError("上传超时，请检查网络后重试");
-          resolve(false);
-        };
-        try {
-          xhr.send(file);
-        } catch (error) {
-          setError(error instanceof Error ? error.message : "上传失败");
-          resolve(false);
-        }
+          },
+          onError: (message) => {
+            setError(message);
+            resolve(false);
+          },
+        });
       }),
     [refreshQueue, syncUploads, detail, purpose],
   );
