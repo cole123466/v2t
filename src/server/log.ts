@@ -80,6 +80,24 @@ export function errorFields(error: unknown): LogFields {
 }
 
 /**
+ * 上传中断等流错误的诊断字段：顶层 name/code + cause 链。
+ * 与 errorFields 不同点：
+ * - 保留顶层 error.code（ECONNRESET/ABORT_ERR 等关键线索常在顶层，message 只有 "aborted"）
+ * - 不受 LOG_STACK 开关影响，诊断字段恒定可查
+ */
+export function errorDiagnosticFields(error: unknown): LogFields {
+  const fields: LogFields = {
+    error: error instanceof Error ? error.message : String(error),
+  };
+  if (error instanceof Error && error.name) fields.error_name = error.name;
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && code) fields.error_code = code;
+  const cause = causeFields(error);
+  if (cause) fields.cause = cause;
+  return fields;
+}
+
+/**
  * 取 error.cause 链上的 code/message。
  * fetch 失败时 undici 只抛 TypeError("fetch failed")，真正原因（ECONNRESET、
  * ETIMEDOUT、证书错误…）全在 cause 里，不记下来就没法排查网络问题。
