@@ -1,5 +1,5 @@
 import { createWriteStream } from "node:fs";
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
@@ -9,7 +9,7 @@ import { normalizeArticleOptions } from "@/server/articles";
 import { sourcePath, taskDir } from "@/server/paths";
 import { QUEUE_FULL_CODE, QueueFullError, queueFullMessage } from "@/server/runner";
 import { getRuntime } from "@/server/runtime";
-import { logInfo, logWarn } from "@/server/log";
+import { errorDiagnosticFields, logInfo, logWarn } from "@/server/log";
 import { REQUEST_ID_HEADER } from "@/server/request";
 import { deviceOwner } from "@/server/owner";
 
@@ -92,14 +92,18 @@ export async function POST(req: Request) {
       Readable.fromWeb(req.body as unknown as NodeWebReadableStream<Uint8Array>),
       createWriteStream(dest),
     );
-  } catch {
+  } catch (err) {
     store.update(task.id, { status: "failed", error: "上传中断，文件不完整" });
     logWarn("upload interrupted", {
       task_id: task.id,
       trace_id: traceId,
       file: originalName,
       bytes: sizeBytes,
+      // 记录 pipeline 断连的真实错误（code/message/cause）；原先空 catch 丢弃了它，无法定位
+      ...errorDiagnosticFields(err),
     });
+    // 半截文件没有保留价值，顺手清理；清理失败不影响主流程响应
+    await rm(dest, { force: true }).catch(() => {});
     return fail("上传中断", 500);
   }
 

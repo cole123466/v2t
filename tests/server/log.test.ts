@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { errorFields, formatLogLine } from "@/server/log";
+import { errorDiagnosticFields, errorFields, formatLogLine } from "@/server/log";
 
 const originalStack = process.env.LOG_STACK;
 
@@ -56,5 +56,40 @@ describe("日志格式", () => {
     const fields = errorFields(new Error("boom"));
     expect(fields.error).toBe("boom");
     expect(String(fields.stack)).toContain("boom");
+  });
+});
+
+describe("上传中断诊断字段", () => {
+  it("记录顶层 name/code/message（pipeline 断连错误 code 在顶层、无 cause）", () => {
+    // 复现 harness 实测：name=Error, code=ECONNRESET, message=aborted, 无 cause
+    const err = Object.assign(new Error("aborted"), { code: "ECONNRESET" });
+    expect(errorDiagnosticFields(err)).toEqual({
+      error: "aborted",
+      error_name: "Error",
+      error_code: "ECONNRESET",
+    });
+  });
+
+  it("cause 链仍保留，顶层 name/code 一并记下", () => {
+    const cause = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+    const wrapped = Object.assign(new TypeError("fetch failed"), { cause, code: "UND_ERR" });
+    expect(errorDiagnosticFields(wrapped)).toEqual({
+      error: "fetch failed",
+      error_name: "TypeError",
+      error_code: "UND_ERR",
+      cause: "ECONNRESET: read ECONNRESET",
+    });
+  });
+
+  it("非 Error 输入安全降级，不产生 name/code", () => {
+    expect(errorDiagnosticFields("plain string")).toEqual({ error: "plain string" });
+    expect(errorDiagnosticFields(null)).toEqual({ error: "null" });
+  });
+
+  it("无 code 的错误不写空字段", () => {
+    expect(errorDiagnosticFields(new Error("boom"))).toEqual({
+      error: "boom",
+      error_name: "Error",
+    });
   });
 });
