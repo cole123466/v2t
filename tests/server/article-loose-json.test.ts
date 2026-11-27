@@ -137,4 +137,12 @@ describe("looseJsonBody 缺逗号修复", () => {
     expect(parse('{"tags":["x"-1"y"]}')).toEqual({ tags: ['x"-1"y'] });
     expect(parse('{"tags":["a"1"b"]}')).toEqual({ tags: ['a"1"b'] });
   });
+
+  it("开头为分隔符的字符串不打断括号栈（审查缺陷）", () => {
+    expect(parse('{"a":[1,{}],"b":[" 1{"]}')).toEqual({ a: [1, {}], b: [" 1{"] });
+  });
+
+  it("正文仅末尾一个引号不被误拆（审查缺陷）", () => {
+    expect(parse('{"tags":["他说""]}')).toEqual({ tags: ['他说"'] });
+  });
 });

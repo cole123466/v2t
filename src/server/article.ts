@@ -725,7 +725,7 @@ function closeTruncated(body: string): string {
       continue;
     }
     if (ch === '"') {
-      if (!quoteEndsString(body, i, stack[stack.length - 1] === "[")) inString = true;
+      inString = true;
       continue;
     }
     if (ch === "{" || ch === "[") {
@@ -825,7 +825,7 @@ function repairUnescapedQuotes(body: string): string {
       } else {
         let j = i + 1;
         while (j < body.length && /\s/.test(body[j])) j++;
-        if (stack[stack.length - 1] === "[" && body[j] === '"' && innerQuotes === 0) {
+        if (stack[stack.length - 1] === "[" && body[j] === '"' && innerQuotes === 0 && j > i + 1) {
           out += '",';
           inString = false;
         } else {
