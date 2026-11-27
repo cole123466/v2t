@@ -120,4 +120,14 @@ describe("looseJsonBody 缺逗号修复", () => {
     expect(parse('{"t":[1e3]}')).toEqual({ t: [1000] });
     expect(parse('{"t":["甲","乙"]}')).toEqual({ t: ["甲", "乙"] });
   });
+
+  it("正文以引号结尾的字符串不被误拆成两个元素", () => {
+    expect(parse('{"tags":["关键词"AI""]}')).toEqual({ tags: ['关键词"AI"'] });
+    expect(parse('{"tags":["a"b"c"]}')).toEqual({ tags: ['a"b"c'] });
+  });
+
+  it("字符串元素后接容器或原始值也能补上逗号", () => {
+    expect(parse('{"t":["甲" {"a":1}]}')).toEqual({ t: ["甲", { a: 1 }] });
+    expect(parse('{"t":["甲" 1]}')).toEqual({ t: ["甲", 1] });
+  });
 });
