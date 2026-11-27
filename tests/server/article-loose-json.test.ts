@@ -104,4 +104,20 @@ describe("looseJsonBody 缺逗号修复", () => {
     const src = '{"blocks":[{"type":"paragraph","text":"甲"},{"type":"figure","frameId":"f01"}]}';
     expect(parse(src)).toEqual(JSON.parse(src));
   });
+
+  it("未转义引号不把逗号插进数组字符串正文（审查缺陷）", () => {
+    expect(parse('{"t":["x"y1{z}"w"]}')).toEqual({ t: ['x"y1{z}"w'] });
+  });
+
+  it("数组元素缺逗号修复覆盖字符串、容器与原始值（审查缺陷）", () => {
+    expect(parse('{"t":["甲" "乙"]}')).toEqual({ t: ["甲", "乙"] });
+    expect(parse('{"t":[{"a":1} "x"]}')).toEqual({ t: [{ a: 1 }, "x"] });
+    expect(parse('{"t":[1 2]}')).toEqual({ t: [1, 2] });
+  });
+
+  it("合法数字与字符串数组不被误拆", () => {
+    expect(parse('{"t":[12]}')).toEqual({ t: [12] });
+    expect(parse('{"t":[1e3]}')).toEqual({ t: [1000] });
+    expect(parse('{"t":["甲","乙"]}')).toEqual({ t: ["甲", "乙"] });
+  });
 });
