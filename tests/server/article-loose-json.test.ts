@@ -99,4 +99,9 @@ describe("looseJsonBody 缺逗号修复", () => {
   it("字符串内容里的 }{ 不被改坏", () => {
     expect(parse('{"a":"示例}{文本","b":1}')).toEqual({ a: "示例}{文本", b: 1 });
   });
+
+  it("合法的相邻对象数组原样通过，不插入多余逗号", () => {
+    const src = '{"blocks":[{"type":"paragraph","text":"甲"},{"type":"figure","frameId":"f01"}]}';
+    expect(parse(src)).toEqual(JSON.parse(src));
+  });
 });
