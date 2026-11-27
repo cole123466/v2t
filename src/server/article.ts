@@ -565,12 +565,83 @@ export function looseJsonBody(raw: string): string {
 
   // 截断处理：先看整体是否闭合，不闭合就补齐
   body = closeTruncated(body);
+  // 数组元素之间漏逗号（如 blocks 的 `}{`）也要先补，否则 JSON.parse 直接失败
+  body = insertMissingArrayCommas(body);
   // 缺逗号修复必须先于 repairUnescapedQuotes：否则后者会把缺逗号处的
   // 合法收尾引号误判为正文内引号转义掉，把两个独立字符串焊死
   body = insertMissingCommas(body);
   body = repairUnescapedQuotes(body);
   body = body.replace(/,(\s*[}\]])/g, "$1");
   return body;
+}
+
+/** 引号是否为字符串收尾：跳过空白后看下一字符是否为 JSON 分隔符或数组新值起点。 */
+function quoteEndsString(body: string, i: number, inArray: boolean): boolean {
+  let j = i + 1;
+  while (j < body.length && /\s/.test(body[j])) j += 1;
+  const next = body[j];
+  if (next === undefined) return true;
+  if (next === "," || next === ":" || next === "}" || next === "]") return true;
+  // 数组内字符串后紧跟另一个值的起点，视为该字符串结束（缺逗号场景）
+  // 必须隔着空白：紧贴的数字/括号更可能是正文里的引号，不能当作字符串收尾
+  return inArray && j > i + 1 && (next === "{" || next === "[" || next === "-" || /[0-9]/.test(next));
+}
+
+/**
+ * 补齐数组中相邻元素间漏掉的逗号（模型长输出的高发缺陷：`}{"type":...}`）。
+ * 只在数组上下文、且前一个非空白字符明确是某个值的收尾时插入，
+ * 避免把对象内相邻属性（`{"a":1"b":2}`）误判成数组元素。
+ */
+function insertMissingArrayCommas(body: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  const stack: string[] = [];
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      // 与 repairUnescapedQuotes 同判定：未转义引号后若不是分隔符属于正文，
+      // 此处必须保持 inString，否则正文里的 { 会被当成新数组元素
+      else if (ch === '"' && quoteEndsString(body, i, stack[stack.length - 1] === "[")) inString = false;
+      continue;
+    }
+    if (ch === '"' || ch === "{" || ch === "[") {
+      if (stack[stack.length - 1] === "[") {
+        let p = out.length - 1;
+        while (p >= 0 && /\s/.test(out[p])) p--;
+        const prev = p >= 0 ? out[p] : "";
+        // `}`/`]` 收尾、字符串收尾、数字或 true/false/null 尾字母
+        if (prev !== "" && prev !== "," && prev !== "[" && /["\}\]0-9eElL]/.test(prev)) {
+          out += ",";
+        }
+      }
+      if (ch === '"') inString = true;
+      else stack.push(ch);
+      out += ch;
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      if (stack.length > 0) stack.pop();
+      out += ch;
+      continue;
+    }
+    // 原始值元素（数字 / true / false / null）：仅在两个值之间有空白时补，
+    // 避免把合法数字 12 误拆成 1,2
+    if (stack[stack.length - 1] === "[" && /[\-0-9tfn]/.test(ch)) {
+      let p = out.length - 1;
+      const hadSpace = p >= 0 && /\s/.test(out[p]);
+      while (p >= 0 && /\s/.test(out[p])) p--;
+      const prev = p >= 0 ? out[p] : "";
+      if (hadSpace && prev !== "" && prev !== "," && prev !== "[" && /["\}\]0-9eElL]/.test(prev)) {
+        out += ",";
+      }
+    }
+    out += ch;
+  }
+  return out;
 }
 
 /**
@@ -646,7 +717,8 @@ function closeTruncated(body: string): string {
     if (inString) {
       if (escaped) escaped = false;
       else if (ch === "\\") escaped = true;
-      else if (ch === '"') {
+      // 正文里未转义的引号不是字符串收尾，否则其后的 { [ 会被误算进括号栈
+      else if (ch === '"' && quoteEndsString(body, i, stack[stack.length - 1] === "[")) {
         inString = false;
         lastSafe = i + 1;
       }
@@ -713,17 +785,27 @@ function closeTruncated(body: string): string {
 
 /**
  * 修复字符串内未转义的英文双引号。
- * 判定：字符串内遇到 `"` 后，若其后（跳过空白）不是 , : } ] 或结尾，则该引号属于正文内容。
+ * 判定：字符串内遇到 \" 后，若其后（跳过空白）不是 , : } ] 或结尾，则该引号属于正文内容。
+ * 数组内相邻字符串漏逗号时收口并补逗号；仅当该字符串此前没有正文引号时才这样判定，
+ * 否则正文以引号结尾（如 关键词\"AI\""）会被误拆成两个元素。
  */
 function repairUnescapedQuotes(body: string): string {
   let out = "";
   let inString = false;
   let escaped = false;
+  let innerQuotes = 0;
+  const stack: string[] = [];
   for (let i = 0; i < body.length; i++) {
     const ch = body[i];
     if (!inString) {
       out += ch;
-      if (ch === '"') inString = true;
+      if (ch === '"') {
+        inString = true;
+        innerQuotes = 0;
+      } else if (ch === "{" || ch === "[") stack.push(ch);
+      else if (ch === "}" || ch === "]") {
+        if (stack.length > 0) stack.pop();
+      }
       continue;
     }
     if (escaped) {
@@ -737,16 +819,19 @@ function repairUnescapedQuotes(body: string): string {
       continue;
     }
     if (ch === '"') {
-      // 看下一个非空白字符，判断是字符串结束还是正文里的引号
-      let j = i + 1;
-      while (j < body.length && /\s/.test(body[j])) j++;
-      const next = body[j];
-      const endsString = next === undefined || next === "," || next === ":" || next === "}" || next === "]";
-      if (endsString) {
+      if (quoteEndsString(body, i, stack[stack.length - 1] === "[")) {
         out += ch;
         inString = false;
       } else {
-        out += '\\"';
+        let j = i + 1;
+        while (j < body.length && /\s/.test(body[j])) j++;
+        if (stack[stack.length - 1] === "[" && body[j] === '"' && innerQuotes === 0 && j > i + 1) {
+          out += '",';
+          inString = false;
+        } else {
+          out += '\\"';
+          innerQuotes += 1;
+        }
       }
       continue;
     }

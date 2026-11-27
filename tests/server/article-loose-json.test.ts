@@ -70,4 +70,79 @@ describe("looseJsonBody 缺逗号修复", () => {
     expect(out.title).toBe("视频拆解");
     expect(out.mindMap).toEqual([]);
   });
+
+  it("blocks 数组对象之间漏逗号（线上 position 1411/1414 同型）", () => {
+    const out = parse<{
+      blocks: Array<{ type: string; text?: string; frameId?: string }>;
+    }>(
+      '{"blocks":[{"type":"paragraph","text":"甲"}{"type":"figure","frameId":"f01"}{"type":"paragraph","text":"乙"}]}',
+    );
+    expect(out.blocks).toEqual([
+      { type: "paragraph", text: "甲" },
+      { type: "figure", frameId: "f01" },
+      { type: "paragraph", text: "乙" },
+    ]);
+  });
+
+  it("跨行与嵌套数组只在数组元素之间补逗号", () => {
+    const out = parse<{ tags: string[][]; blocks: Array<{ id: number }> }>(
+      '{"tags":[["a","b"]\n["c"]],"blocks":[{"id":1}\n{"id":2}]}',
+    );
+    expect(out.tags).toEqual([["a", "b"], ["c"]]);
+    expect(out.blocks).toEqual([{ id: 1 }, { id: 2 }]);
+  });
+
+  it("对象属性漏逗号仍由原逻辑修复，不被数组规则误伤", () => {
+    expect(parse('{"a":{"x":1"y":2}}')).toEqual({ a: { x: 1, y: 2 } });
+  });
+
+  it("字符串内容里的 }{ 不被改坏", () => {
+    expect(parse('{"a":"示例}{文本","b":1}')).toEqual({ a: "示例}{文本", b: 1 });
+  });
+
+  it("合法的相邻对象数组原样通过，不插入多余逗号", () => {
+    const src = '{"blocks":[{"type":"paragraph","text":"甲"},{"type":"figure","frameId":"f01"}]}';
+    expect(parse(src)).toEqual(JSON.parse(src));
+  });
+
+  it("未转义引号不把逗号插进数组字符串正文（审查缺陷）", () => {
+    expect(parse('{"t":["x"y1{z}"w"]}')).toEqual({ t: ['x"y1{z}"w'] });
+  });
+
+  it("数组元素缺逗号修复覆盖字符串、容器与原始值（审查缺陷）", () => {
+    expect(parse('{"t":["甲" "乙"]}')).toEqual({ t: ["甲", "乙"] });
+    expect(parse('{"t":[{"a":1} "x"]}')).toEqual({ t: [{ a: 1 }, "x"] });
+    expect(parse('{"t":[1 2]}')).toEqual({ t: [1, 2] });
+  });
+
+  it("合法数字与字符串数组不被误拆", () => {
+    expect(parse('{"t":[12]}')).toEqual({ t: [12] });
+    expect(parse('{"t":[1e3]}')).toEqual({ t: [1000] });
+    expect(parse('{"t":["甲","乙"]}')).toEqual({ t: ["甲", "乙"] });
+  });
+
+  it("正文以引号结尾的字符串不被误拆成两个元素", () => {
+    expect(parse('{"tags":["关键词"AI""]}')).toEqual({ tags: ['关键词"AI"'] });
+    expect(parse('{"tags":["a"b"c"]}')).toEqual({ tags: ['a"b"c'] });
+  });
+
+  it("字符串元素后接容器或原始值也能补上逗号", () => {
+    expect(parse('{"t":["甲" {"a":1}]}')).toEqual({ t: ["甲", { a: 1 }] });
+    expect(parse('{"t":["甲" 1]}')).toEqual({ t: ["甲", 1] });
+  });
+
+  it("正文引号紧贴数字或括号不被误判为字符串收尾", () => {
+    expect(parse('{"tags":["引用"2024"年的数据"]}')).toEqual({ tags: ['引用"2024"年的数据'] });
+    expect(parse('{"tags":["花括号"{"的例子"]}')).toEqual({ tags: ['花括号"{"的例子'] });
+    expect(parse('{"tags":["x"-1"y"]}')).toEqual({ tags: ['x"-1"y'] });
+    expect(parse('{"tags":["a"1"b"]}')).toEqual({ tags: ['a"1"b'] });
+  });
+
+  it("开头为分隔符的字符串不打断括号栈（审查缺陷）", () => {
+    expect(parse('{"a":[1,{}],"b":[" 1{"]}')).toEqual({ a: [1, {}], b: [" 1{"] });
+  });
+
+  it("正文仅末尾一个引号不被误拆（审查缺陷）", () => {
+    expect(parse('{"tags":["他说""]}')).toEqual({ tags: ['他说"'] });
+  });
 });
