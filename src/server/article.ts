@@ -583,7 +583,8 @@ function quoteEndsString(body: string, i: number, inArray: boolean): boolean {
   if (next === undefined) return true;
   if (next === "," || next === ":" || next === "}" || next === "]") return true;
   // 数组内字符串后紧跟另一个值的起点，视为该字符串结束（缺逗号场景）
-  return inArray && (next === "{" || next === "[" || next === "-" || /[0-9]/.test(next));
+  // 必须隔着空白：紧贴的数字/括号更可能是正文里的引号，不能当作字符串收尾
+  return inArray && j > i + 1 && (next === "{" || next === "[" || next === "-" || /[0-9]/.test(next));
 }
 
 /**
@@ -716,14 +717,15 @@ function closeTruncated(body: string): string {
     if (inString) {
       if (escaped) escaped = false;
       else if (ch === "\\") escaped = true;
-      else if (ch === '"') {
+      // 正文里未转义的引号不是字符串收尾，否则其后的 { [ 会被误算进括号栈
+      else if (ch === '"' && quoteEndsString(body, i, stack[stack.length - 1] === "[")) {
         inString = false;
         lastSafe = i + 1;
       }
       continue;
     }
     if (ch === '"') {
-      inString = true;
+      if (!quoteEndsString(body, i, stack[stack.length - 1] === "[")) inString = true;
       continue;
     }
     if (ch === "{" || ch === "[") {

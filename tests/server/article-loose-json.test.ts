@@ -130,4 +130,11 @@ describe("looseJsonBody 缺逗号修复", () => {
     expect(parse('{"t":["甲" {"a":1}]}')).toEqual({ t: ["甲", { a: 1 }] });
     expect(parse('{"t":["甲" 1]}')).toEqual({ t: ["甲", 1] });
   });
+
+  it("正文引号紧贴数字或括号不被误判为字符串收尾", () => {
+    expect(parse('{"tags":["引用"2024"年的数据"]}')).toEqual({ tags: ['引用"2024"年的数据'] });
+    expect(parse('{"tags":["花括号"{"的例子"]}')).toEqual({ tags: ['花括号"{"的例子'] });
+    expect(parse('{"tags":["x"-1"y"]}')).toEqual({ tags: ['x"-1"y'] });
+    expect(parse('{"tags":["a"1"b"]}')).toEqual({ tags: ['a"1"b'] });
+  });
 });
