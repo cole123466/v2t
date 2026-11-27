@@ -565,12 +565,62 @@ export function looseJsonBody(raw: string): string {
 
   // 截断处理：先看整体是否闭合，不闭合就补齐
   body = closeTruncated(body);
+  // 数组元素之间漏逗号（如 blocks 的 `}{`）也要先补，否则 JSON.parse 直接失败
+  body = insertMissingArrayCommas(body);
   // 缺逗号修复必须先于 repairUnescapedQuotes：否则后者会把缺逗号处的
   // 合法收尾引号误判为正文内引号转义掉，把两个独立字符串焊死
   body = insertMissingCommas(body);
   body = repairUnescapedQuotes(body);
   body = body.replace(/,(\s*[}\]])/g, "$1");
   return body;
+}
+
+/**
+ * 补齐数组中相邻元素间漏掉的逗号（模型长输出的高发缺陷：`}{"type":...}`）。
+ * 只在数组上下文、且前一个非空白字符明确是某个值的收尾时插入，
+ * 避免把对象内相邻属性（`{"a":1"b":2}`）误判成数组元素。
+ */
+function insertMissingArrayCommas(body: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  const stack: string[] = [];
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      out += ch;
+      inString = true;
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      if (stack[stack.length - 1] === "[") {
+        let p = out.length - 1;
+        while (p >= 0 && /\s/.test(out[p])) p--;
+        const prev = p >= 0 ? out[p] : "";
+        // `}`/`]` 收尾、字符串收尾、数字或 true/false/null 尾字母
+        if (prev !== "" && prev !== "," && prev !== "[" && /["\}\]0-9eElL]/.test(prev)) {
+          out += ",";
+        }
+      }
+      stack.push(ch);
+      out += ch;
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      if (stack.length > 0) stack.pop();
+      out += ch;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
 }
 
 /**

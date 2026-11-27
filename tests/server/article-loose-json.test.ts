@@ -70,4 +70,33 @@ describe("looseJsonBody 缺逗号修复", () => {
     expect(out.title).toBe("视频拆解");
     expect(out.mindMap).toEqual([]);
   });
+
+  it("blocks 数组对象之间漏逗号（线上 position 1411/1414 同型）", () => {
+    const out = parse<{
+      blocks: Array<{ type: string; text?: string; frameId?: string }>;
+    }>(
+      '{"blocks":[{"type":"paragraph","text":"甲"}{"type":"figure","frameId":"f01"}{"type":"paragraph","text":"乙"}]}',
+    );
+    expect(out.blocks).toEqual([
+      { type: "paragraph", text: "甲" },
+      { type: "figure", frameId: "f01" },
+      { type: "paragraph", text: "乙" },
+    ]);
+  });
+
+  it("跨行与嵌套数组只在数组元素之间补逗号", () => {
+    const out = parse<{ tags: string[][]; blocks: Array<{ id: number }> }>(
+      '{"tags":[["a","b"]\n["c"]],"blocks":[{"id":1}\n{"id":2}]}',
+    );
+    expect(out.tags).toEqual([["a", "b"], ["c"]]);
+    expect(out.blocks).toEqual([{ id: 1 }, { id: 2 }]);
+  });
+
+  it("对象属性漏逗号仍由原逻辑修复，不被数组规则误伤", () => {
+    expect(parse('{"a":{"x":1"y":2}}')).toEqual({ a: { x: 1, y: 2 } });
+  });
+
+  it("字符串内容里的 }{ 不被改坏", () => {
+    expect(parse('{"a":"示例}{文本","b":1}')).toEqual({ a: "示例}{文本", b: 1 });
+  });
 });
